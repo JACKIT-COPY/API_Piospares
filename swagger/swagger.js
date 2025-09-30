@@ -8,9 +8,18 @@ const options = {
       version: '1.0.0',
       description: 'API for multi-tenant POS system'
     },
-    servers: [{ url: `http://localhost:${process.env.PORT || 5000}` }]
+    servers: [{ url: `http://localhost:${process.env.PORT || 5000}` }],
+    components: {
+      securitySchemes: {
+        bearerAuth: {
+          type: 'http',
+          scheme: 'bearer',
+          bearerFormat: 'JWT'
+        }
+      }
+    }
   },
-  apis: ['./routes/*.js']  // Scan routes for JSDoc comments
+  apis: ['./routes/*.js']  // Scan all routes for JSDoc comments
 };
 
 const specs = swaggerJSDoc(options);

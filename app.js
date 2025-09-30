@@ -2,6 +2,9 @@ const express = require('express');
 const dotenv = require('dotenv');
 const connectDB = require('./config/db');
 const authRoutes = require('./routes/authRoutes');
+const organizationRoutes = require('./routes/organizationRoutes');
+const branchRoutes = require('./routes/branchRoutes');
+const userRoutes = require('./routes/userRoutes');
 const swaggerUi = require('swagger-ui-express');
 const specs = require('./swagger/swagger');
 
@@ -13,6 +16,9 @@ app.use(express.json());
 
 // Routes
 app.use('/auth', authRoutes);
+app.use('/organizations', organizationRoutes);
+app.use('/branches', branchRoutes);
+app.use('/users', userRoutes);
 
 // Swagger
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs));
