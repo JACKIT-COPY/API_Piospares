@@ -1,5 +1,5 @@
 const Joi = require('joi');
-const Organization = require('../models/organization');
+const Organization = require('../models/Organization');
 
 // Validation schema for update
 const updateSchema = Joi.object({
