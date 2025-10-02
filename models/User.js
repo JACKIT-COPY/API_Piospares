@@ -1,8 +1,9 @@
 const mongoose = require('mongoose');
 
+// In models/User.js
 const userSchema = new mongoose.Schema({
   orgId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', required: true },
-  branchId: { type: mongoose.Schema.Types.ObjectId, ref: 'Branch' },
+  branchIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Branch' }], // Changed to array
   name: { type: String, required: true },
   email: { type: String, required: true, unique: true },
   passwordHash: { type: String, required: true },

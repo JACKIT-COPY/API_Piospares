@@ -6,7 +6,7 @@ const Organization = require('../models/Organization');
 const Branch = require('../models/Branch');
 const User = require('../models/User');
 
-// Validation schemas
+// Validation Schemas
 const registerSchema = Joi.object({
   orgName: Joi.string().min(3).max(100).required().messages({
     'string.min': 'Organization name must be at least 3 characters long',
@@ -63,23 +63,23 @@ const register = async (req, res) => {
   session.startTransaction();
 
   try {
-    // Check if org or user exists
-    let org = await Organization.findOne({ email: orgEmail }).session(session);
-    if (org) {
+    // Check for existing organization or user
+    const orgExists = await Organization.findOne({ email: orgEmail });
+    if (orgExists) {
       await session.abortTransaction();
       session.endSession();
       return res.status(400).json({ message: 'Organization already exists' });
     }
 
-    let user = await User.findOne({ email: ownerEmail }).session(session);
-    if (user) {
+    const userExists = await User.findOne({ email: ownerEmail });
+    if (userExists) {
       await session.abortTransaction();
       session.endSession();
       return res.status(400).json({ message: 'User already exists' });
     }
 
     // Create organization
-    org = new Organization({ name: orgName, email: orgEmail, phone: orgPhone, address: orgAddress });
+    const org = new Organization({ name: orgName, email: orgEmail, phone: orgPhone, address: orgAddress });
     await org.save({ session });
 
     // Create main branch
@@ -90,9 +90,9 @@ const register = async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const passwordHash = await bcrypt.hash(ownerPassword, salt);
 
-    user = new User({
+    const user = new User({
       orgId: org._id,
-      branchId: mainBranch._id,
+      branchIds: [mainBranch._id], // Assign main branch to owner
       name: ownerName,
       email: ownerEmail,
       passwordHash,
@@ -104,11 +104,21 @@ const register = async (req, res) => {
     const payload = { userId: user._id, orgId: org._id, role: user.role };
     const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1h' });
 
-    // Commit transaction
+    // Construct response
+    const userResponse = {
+      _id: user._id.toString(),
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      orgId: user.orgId.toString(),
+      orgName: org.name,
+      branches: [{ branchId: mainBranch._id.toString(), branchName: mainBranch.name }]
+    };
+
     await session.commitTransaction();
     session.endSession();
 
-    res.status(201).json({ token, message: 'Organization registered successfully' });
+    res.status(201).json({ token, user: userResponse, message: 'Organization registered successfully' });
   } catch (err) {
     await session.abortTransaction();
     session.endSession();
@@ -116,7 +126,7 @@ const register = async (req, res) => {
   }
 };
 
-// @desc    Login user and get JWT
+// @desc    Login user and get JWT with user details
 // @route   POST /auth/login
 // @access  Public
 const login = async (req, res) => {
@@ -127,19 +137,65 @@ const login = async (req, res) => {
   const { email, password } = req.body;
 
   try {
-    const user = await User.findOne({ email });
+    // Find user
+    const user = await User.findOne({ email }).select('+passwordHash').lean();
     if (!user) return res.status(400).json({ message: 'Invalid credentials' });
 
+    // Verify password
     const isMatch = await bcrypt.compare(password, user.passwordHash);
     if (!isMatch) return res.status(400).json({ message: 'Invalid credentials' });
 
+    // Fetch organization
+    const organization = await Organization.findById(user.orgId).lean();
+    if (!organization) return res.status(404).json({ message: 'Organization not found' });
+
+    // Fetch branches based on role
+    let branchDetails = [];
+    if (user.role === 'Owner') {
+      // Owners get all branches in the organization
+      const branches = await Branch.find({ orgId: user.orgId }).lean();
+      branchDetails = branches.map(branch => ({
+        branchId: branch._id.toString(),
+        branchName: branch.name
+      }));
+    } else if (user.branchIds && user.branchIds.length > 0) {
+      // Managers and Cashiers get only their assigned branches
+      const branches = await Branch.find({ _id: { $in: user.branchIds } }).lean();
+      branchDetails = branches.map(branch => ({
+        branchId: branch._id.toString(),
+        branchName: branch.name
+      }));
+    }
+
+    // Generate JWT
     const payload = { userId: user._id, orgId: user.orgId, role: user.role };
     const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1h' });
 
-    res.json({ token });
+    // Construct response
+    const userResponse = {
+      _id: user._id.toString(),
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      orgId: user.orgId.toString(),
+      orgName: organization.name,
+      branches: branchDetails
+    };
+
+    res.json({ token, user: userResponse });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
-
-module.exports = { register, login };
+// In authController.js
+const verifyToken = async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(401).json({ message: 'No token provided' });
+    jwt.verify(token, process.env.JWT_SECRET); // Throws if invalid
+    res.status(200).json({ message: 'Token valid' });
+  } catch (err) {
+    res.status(401).json({ message: 'Invalid or expired token' });
+  }
+};
+module.exports = { register, login, verifyToken };
