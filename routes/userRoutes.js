@@ -25,7 +25,7 @@ const router = express.Router();
  *           type: string
  *         role:
  *           type: string
- *           enum: [Manager, Cashier]
+ *           enum: [SuperManager, Manager, Cashier]
  *         branchIds:
  *           type: array
  *           items:
@@ -44,7 +44,7 @@ const router = express.Router();
  *           type: string
  *         role:
  *           type: string
- *           enum: [Manager, Cashier]
+ *           enum: [SuperManager, Manager, Cashier]
  *         branchIds:
  *           type: array
  *           items:
@@ -76,7 +76,7 @@ const router = express.Router();
  *       500:
  *         description: Server error
  */
-router.post('/invite', authMiddleware, roleMiddleware(['Owner', 'Manager']), inviteUser);
+router.post('/invite', authMiddleware, roleMiddleware(['Owner', 'Manager', 'SuperManager']), inviteUser);
 
 /**
  * @swagger
@@ -108,7 +108,7 @@ router.post('/invite', authMiddleware, roleMiddleware(['Owner', 'Manager']), inv
  *       500:
  *         description: Server error
  */
-router.put('/:id', authMiddleware, roleMiddleware(['Owner', 'Manager']), updateUser);
+router.put('/:id', authMiddleware, roleMiddleware(['Owner', 'Manager', 'SuperManager']), updateUser);
 
 /**
  * @swagger
@@ -124,6 +124,6 @@ router.put('/:id', authMiddleware, roleMiddleware(['Owner', 'Manager']), updateU
  *       500:
  *         description: Server error
  */
-router.get('/', authMiddleware, roleMiddleware(['Owner', 'Manager']), listUsers);
+router.get('/', authMiddleware, roleMiddleware(['Owner', 'Manager', 'SuperManager']), listUsers);
 
 module.exports = router;
