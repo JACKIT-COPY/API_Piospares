@@ -1,5 +1,5 @@
 const express = require('express');
-const { inviteUser, listUsers } = require('../controllers/userController');
+const { inviteUser, listUsers, updateUser } = require('../controllers/userController');
 const authMiddleware = require('../middlewares/authMiddleware');
 const roleMiddleware = require('../middlewares/roleMiddleware');
 
@@ -16,6 +16,25 @@ const router = express.Router();
  *         - email
  *         - password
  *         - role
+ *       properties:
+ *         name:
+ *           type: string
+ *         email:
+ *           type: string
+ *         password:
+ *           type: string
+ *         role:
+ *           type: string
+ *           enum: [Manager, Cashier]
+ *         branchIds:
+ *           type: array
+ *           items:
+ *             type: string
+ *         status:
+ *           type: string
+ *           enum: [Active, On Leave, Inactive]
+ *     UserUpdate:
+ *       type: object
  *       properties:
  *         name:
  *           type: string
@@ -52,18 +71,6 @@ const router = express.Router();
  *     responses:
  *       201:
  *         description: User invited
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 _id: { type: string }
- *                 orgId: { type: string }
- *                 branchIds: { type: array, items: { type: string } }
- *                 name: { type: string }
- *                 email: { type: string }
- *                 role: { type: string }
- *                 status: { type: string }
  *       400:
  *         description: Bad request
  *       500:
@@ -73,36 +80,47 @@ router.post('/invite', authMiddleware, roleMiddleware(['Owner', 'Manager']), inv
 
 /**
  * @swagger
+ * /users/{id}:
+ *   put:
+ *     summary: Update a user
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/UserUpdate'
+ *     responses:
+ *       200:
+ *         description: User updated
+ *       400:
+ *         description: Bad request
+ *       404:
+ *         description: User not found
+ *       500:
+ *         description: Server error
+ */
+router.put('/:id', authMiddleware, roleMiddleware(['Owner', 'Manager']), updateUser);
+
+/**
+ * @swagger
  * /users:
  *   get:
  *     summary: List users for organization
  *     tags: [Users]
  *     security:
  *       - bearerAuth: []
- *     parameters:
- *       - in: query
- *         name: branchId
- *         schema:
- *           type: string
- *         description: Filter users by branch ID
  *     responses:
  *       200:
  *         description: List of users
- *         content:
- *           application/json:
- *             schema:
- *               type: array
- *               items:
- *                 type: object
- *                 properties:
- *                   _id: { type: string }
- *                   orgId: { type: string }
- *                   branchIds: { type: array, items: { type: string } }
- *                   name: { type: string }
- *                   email: { type: string }
- *                   role: { type: string }
- *                   status: { type: string }
- *                   createdAt: { type: string }
  *       500:
  *         description: Server error
  */

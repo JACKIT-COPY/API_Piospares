@@ -3,38 +3,21 @@ const Joi = require('joi');
 const User = require('../models/User');
 const Branch = require('../models/Branch');
 
-// Validation schema for user invitation
-const inviteSchema = Joi.object({
-  name: Joi.string().min(2).max(50).required().messages({
-    'string.min': 'Name must be at least 2 characters long',
-    'string.max': 'Name must not exceed 50 characters',
-    'any.required': 'Name is required'
-  }),
-  email: Joi.string().email().required().messages({
-    'string.email': 'Email must be a valid email address',
-    'any.required': 'Email is required'
-  }),
-  password: Joi.string().min(8).required().messages({
-    'string.min': 'Password must be at least 8 characters long',
-    'any.required': 'Password is required'
-  }),
-  role: Joi.string().valid('Manager', 'Cashier').required().messages({
-    'any.only': 'Role must be either Manager or Cashier',
-    'any.required': 'Role is required'
-  }),
-  branchIds: Joi.array().items(Joi.string()).optional().messages({
-    'array.base': 'Branch IDs must be an array of strings'
-  }),
-  status: Joi.string().valid('Active', 'On Leave', 'Inactive').optional().messages({
-    'any.only': 'Status must be Active, On Leave, or Inactive'
-  })
+// Validation schema for user invitation and update
+const userSchema = Joi.object({
+  name: Joi.string().min(2).max(50).optional(),
+  email: Joi.string().email().optional(),
+  password: Joi.string().min(8).optional(),
+  role: Joi.string().valid('Manager', 'Cashier').optional(),
+  branchIds: Joi.array().items(Joi.string()).optional(),
+  status: Joi.string().valid('Active', 'On Leave', 'Inactive').optional()
 });
 
 // @desc    Invite/add new user
 // @route   POST /users/invite
 // @access  Owner/Manager
 const inviteUser = async (req, res) => {
-  const { error } = inviteSchema.validate(req.body);
+  const { error } = userSchema.validate(req.body);
   if (error) return res.status(400).json({ message: error.details[0].message });
 
   const { name, email, password, role, branchIds, status } = req.body;
@@ -71,11 +54,11 @@ const inviteUser = async (req, res) => {
       email,
       passwordHash,
       role,
-      status: status || 'Active' // Default to Active if not provided
+      status: status || 'Active'
     });
     await user.save();
 
-    // Construct response (omit passwordHash)
+    // Response without passwordHash
     const userResponse = {
       _id: user._id.toString(),
       orgId: user.orgId.toString(),
@@ -92,6 +75,51 @@ const inviteUser = async (req, res) => {
   }
 };
 
+// @desc    Update a user
+// @route   PUT /users/:id
+// @access  Owner/Manager
+const updateUser = async (req, res) => {
+  const { error } = userSchema.validate(req.body);
+  if (error) return res.status(400).json({ message: error.details[0].message });
+
+  try {
+    const updateData = { ...req.body };
+
+    if (updateData.password) {
+      const salt = await bcrypt.genSalt(10);
+      updateData.passwordHash = await bcrypt.hash(updateData.password, salt);
+      delete updateData.password;
+    }
+
+    if (updateData.branchIds) {
+      const branches = await Branch.find({ _id: { $in: updateData.branchIds }, orgId: req.user.orgId }).lean();
+      if (branches.length !== updateData.branchIds.length) {
+        return res.status(400).json({ message: 'One or more branch IDs are invalid' });
+      }
+      updateData.branchIds = branches.map(branch => branch._id);
+
+      // Check role for branch limit
+      const user = await User.findById(req.params.id);
+      if (!user) return res.status(404).json({ message: 'User not found' });
+      if (user.role === 'Cashier' && updateData.branchIds.length > 1) {
+        return res.status(400).json({ message: 'Cashiers can only be assigned to a single branch' });
+      }
+    }
+
+    const updatedUser = await User.findOneAndUpdate(
+      { _id: req.params.id, orgId: req.user.orgId },
+      updateData,
+      { new: true, runValidators: true }
+    ).select('-passwordHash');
+
+    if (!updatedUser) return res.status(404).json({ message: 'User not found' });
+
+    res.json(updatedUser);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
 // @desc    List users for organization
 // @route   GET /users
 // @access  Owner/Manager
@@ -101,20 +129,10 @@ const listUsers = async (req, res) => {
     const query = { orgId: req.user.orgId };
     if (branchId) query.branchIds = branchId;
     const users = await User.find(query).select('-passwordHash').lean();
-    const usersResponse = users.map(user => ({
-      _id: user._id.toString(),
-      orgId: user.orgId.toString(),
-      branchIds: user.branchIds.map(id => id.toString()),
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      status: user.status,
-      createdAt: user.createdAt
-    }));
-    res.json(usersResponse);
+    res.json(users);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
 
-module.exports = { inviteUser, listUsers };
+module.exports = { inviteUser, listUsers, updateUser };
