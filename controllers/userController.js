@@ -24,6 +24,9 @@ const inviteSchema = Joi.object({
   }),
   branchIds: Joi.array().items(Joi.string()).optional().messages({
     'array.base': 'Branch IDs must be an array of strings'
+  }),
+  status: Joi.string().valid('Active', 'On Leave', 'Inactive').optional().messages({
+    'any.only': 'Status must be Active, On Leave, or Inactive'
   })
 });
 
@@ -34,7 +37,7 @@ const inviteUser = async (req, res) => {
   const { error } = inviteSchema.validate(req.body);
   if (error) return res.status(400).json({ message: error.details[0].message });
 
-  const { name, email, password, role, branchIds } = req.body;
+  const { name, email, password, role, branchIds, status } = req.body;
 
   try {
     // Check if user exists
@@ -67,7 +70,8 @@ const inviteUser = async (req, res) => {
       name,
       email,
       passwordHash,
-      role
+      role,
+      status: status || 'Active' // Default to Active if not provided
     });
     await user.save();
 
@@ -78,7 +82,8 @@ const inviteUser = async (req, res) => {
       branchIds: user.branchIds.map(id => id.toString()),
       name: user.name,
       email: user.email,
-      role: user.role
+      role: user.role,
+      status: user.status
     };
 
     res.status(201).json(userResponse);
@@ -92,14 +97,19 @@ const inviteUser = async (req, res) => {
 // @access  Owner/Manager
 const listUsers = async (req, res) => {
   try {
-    const users = await User.find({ orgId: req.user.orgId }).select('-passwordHash').lean();
+    const { branchId } = req.query;
+    const query = { orgId: req.user.orgId };
+    if (branchId) query.branchIds = branchId;
+    const users = await User.find(query).select('-passwordHash').lean();
     const usersResponse = users.map(user => ({
       _id: user._id.toString(),
       orgId: user.orgId.toString(),
       branchIds: user.branchIds.map(id => id.toString()),
       name: user.name,
       email: user.email,
-      role: user.role
+      role: user.role,
+      status: user.status,
+      createdAt: user.createdAt
     }));
     res.json(usersResponse);
   } catch (err) {
