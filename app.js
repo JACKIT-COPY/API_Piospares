@@ -5,6 +5,8 @@ const authRoutes = require('./routes/authRoutes');
 const organizationRoutes = require('./routes/organizationRoutes');
 const branchRoutes = require('./routes/branchRoutes');
 const userRoutes = require('./routes/userRoutes');
+const categoryRoutes = require('./routes/categoryRoutes');
+const productRoutes = require('./routes/productRoutes');
 const swaggerUi = require('swagger-ui-express');
 const specs = require('./swagger/swagger');
 const helmet = require('helmet');
@@ -47,6 +49,8 @@ app.use('/auth', authRoutes);
 app.use('/organizations', organizationRoutes);
 app.use('/branches', branchRoutes);
 app.use('/users', userRoutes);
+app.use('/categories', categoryRoutes);
+app.use('/products', productRoutes);
 
 // Swagger
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs));
