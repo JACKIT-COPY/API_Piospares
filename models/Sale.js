@@ -11,9 +11,9 @@ const saleSchema = new mongoose.Schema({
     quantity: { type: Number, required: true },
   }],
   total: { type: Number, required: true },
-  discount: { type: Number, default: 0 }, // Discount amount (KSh)
+  discount: { type: Number, default: 0 },
   paymentMethod: { type: String, enum: ['cash', 'mpesa', 'pending'], required: true },
-  status: { type: String, enum: ['completed', 'pending'], default: 'completed' },
+  status: { type: String, enum: ['completed', 'pending', 'returned'], default: 'completed' },
 }, { timestamps: true });
 
 saleSchema.index({ orgId: 1, branchId: 1, userId: 1 });

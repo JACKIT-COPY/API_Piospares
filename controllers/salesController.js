@@ -19,7 +19,7 @@ const createSchema = Joi.object({
 
 // Validation schema for updating sale status
 const updateStatusSchema = Joi.object({
-  status: Joi.string().valid('completed', 'pending').required(),
+  status: Joi.string().valid('completed', 'pending', 'returned').required(),
   paymentMethod: Joi.string().valid('cash', 'mpesa').when('status', { is: 'completed', then: Joi.required() }),
 });
 
@@ -60,7 +60,7 @@ const createSale = async (req, res) => {
     const sale = new Sale({
       orgId: req.user.orgId,
       branchId,
-      userId: req.user.userId, // Use userId from JWT payload
+      userId: req.user.userId,
       products,
       total: finalTotal,
       discount: discount || 0,
@@ -124,6 +124,19 @@ const updateSaleStatus = async (req, res) => {
         await Product.findByIdAndUpdate(
           item.productId,
           { $inc: { stock: -item.quantity } },
+          { runValidators: true }
+        );
+      }
+    }
+
+    // If updating to returned, restock products
+    if (req.body.status === 'returned' && sale.status !== 'returned') {
+      for (const item of sale.products) {
+        const product = await Product.findById(item.productId);
+        if (!product) return res.status(404).json({ message: `Product ${item.name} not found` });
+        await Product.findByIdAndUpdate(
+          item.productId,
+          { $inc: { stock: item.quantity } },
           { runValidators: true }
         );
       }

@@ -43,7 +43,7 @@ const router = express.Router();
  *       properties:
  *         status:
  *           type: string
- *           enum: [completed, pending]
+ *           enum: [completed, pending, returned]
  *         paymentMethod:
  *           type: string
  *           enum: [cash, mpesa]
