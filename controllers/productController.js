@@ -19,8 +19,9 @@ const updateSchema = Joi.object({
   price: Joi.number().positive().optional(),
   stock: Joi.number().integer().min(0).optional(),
   minStock: Joi.number().integer().min(0).optional(),
-  description: Joi.string().max(500).optional()
-});
+  description: Joi.string().max(500).optional(),
+  branchId: Joi.string().optional(),
+}).unknown(false); // Disallow unknown fields like _id
 
 // @desc    Create a new product
 // @route   POST /products

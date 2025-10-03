@@ -48,6 +48,8 @@ const router = express.Router();
  *           type: number
  *         description:
  *           type: string
+ *         branchId:
+ *           type: string
  */
 
 /**
