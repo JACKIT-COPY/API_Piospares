@@ -1,5 +1,6 @@
 const Joi = require('joi');
 const Category = require('../models/Category');
+const Product = require('../models/Product');
 
 // Validation schema for category creation
 const createSchema = Joi.object({
@@ -13,7 +14,7 @@ const updateSchema = Joi.object({
 
 // @desc    Create a new category
 // @route   POST /categories
-// @access  Owner/Manager
+// @access  Owner/Manager/SuperManager
 const createCategory = async (req, res) => {
   const { error } = createSchema.validate(req.body);
   if (error) return res.status(400).json({ message: error.details[0].message });
@@ -21,6 +22,8 @@ const createCategory = async (req, res) => {
   try {
     const category = new Category({
       orgId: req.user.orgId,
+      createdBy: req.user._id,
+      updatedBy: req.user._id,
       ...req.body
     });
     await category.save();
@@ -32,15 +35,15 @@ const createCategory = async (req, res) => {
 
 // @desc    Update a category
 // @route   PUT /categories/:id
-// @access  Owner/Manager
+// @access  Owner/Manager/SuperManager
 const updateCategory = async (req, res) => {
   const { error } = updateSchema.validate(req.body);
   if (error) return res.status(400).json({ message: error.details[0].message });
 
   try {
     const category = await Category.findOneAndUpdate(
-      { _id: req.params.id, orgId: req.user.orgId },
-      req.body,
+      { _id: req.params.id, orgId: req.user.orgId, isDeleted: false },
+      { ...req.body, updatedBy: req.user._id },
       { new: true, runValidators: true }
     );
     if (!category) return res.status(404).json({ message: 'Category not found' });
@@ -52,10 +55,17 @@ const updateCategory = async (req, res) => {
 
 // @desc    Delete a category
 // @route   DELETE /categories/:id
-// @access  Owner/Manager
+// @access  Owner/Manager/SuperManager
 const deleteCategory = async (req, res) => {
   try {
-    const category = await Category.findOneAndDelete({ _id: req.params.id, orgId: req.user.orgId });
+    const productCount = await Product.countDocuments({ categoryId: req.params.id, isDeleted: false });
+    if (productCount > 0) return res.status(400).json({ message: 'Cannot delete category with associated products' });
+
+    const category = await Category.findOneAndUpdate(
+      { _id: req.params.id, orgId: req.user.orgId, isDeleted: false },
+      { isDeleted: true, updatedBy: req.user._id },
+      { new: true }
+    );
     if (!category) return res.status(404).json({ message: 'Category not found' });
     res.json({ message: 'Category deleted' });
   } catch (err) {
@@ -65,10 +75,10 @@ const deleteCategory = async (req, res) => {
 
 // @desc    List categories for organization
 // @route   GET /categories
-// @access  Owner/Manager/Cashier
+// @access  Owner/Manager/Cashier/SuperManager
 const listCategories = async (req, res) => {
   try {
-    const categories = await Category.find({ orgId: req.user.orgId }).lean();
+    const categories = await Category.find({ orgId: req.user.orgId, isDeleted: false }).lean();
     res.json(categories);
   } catch (err) {
     res.status(500).json({ message: err.message });

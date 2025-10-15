@@ -8,9 +8,22 @@ const productSchema = new mongoose.Schema({
   description: { type: String },
   price: { type: Number, required: true },
   stock: { type: Number, required: true },
-  minStock: { type: Number, required: true }
+  minStock: { type: Number, required: true },
+  buyingPrice: { type: Number, min: 0, optional: true },
+  imageUrl: { type: String, optional: true },
+  isDeleted: { type: Boolean, default: false },
+  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
 }, { timestamps: true });
 
 productSchema.index({ orgId: 1, branchId: 1 });
+
+// Pre-save hook to set createdBy and updatedBy
+productSchema.pre('save', function(next) {
+  if (this.isNew && this.createdBy) {
+    this.updatedBy = this.createdBy;
+  }
+  next();
+});
 
 module.exports = mongoose.model('Product', productSchema);

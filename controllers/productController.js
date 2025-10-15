@@ -9,7 +9,9 @@ const createSchema = Joi.object({
   stock: Joi.number().integer().min(0).required(),
   minStock: Joi.number().integer().min(0).required(),
   branchId: Joi.string().required(),
-  description: Joi.string().max(500).optional()
+  description: Joi.string().max(500).optional(),
+  buyingPrice: Joi.number().min(0).optional(),
+  imageUrl: Joi.string().uri().optional()
 });
 
 // Validation schema for product update
@@ -21,6 +23,8 @@ const updateSchema = Joi.object({
   minStock: Joi.number().integer().min(0).optional(),
   description: Joi.string().max(500).optional(),
   branchId: Joi.string().optional(),
+  buyingPrice: Joi.number().min(0).optional(),
+  imageUrl: Joi.string().uri().optional()
 }).unknown(false); // Disallow unknown fields like _id
 
 // @desc    Create a new product
@@ -33,6 +37,8 @@ const createProduct = async (req, res) => {
   try {
     const product = new Product({
       orgId: req.user.orgId,
+      createdBy: req.user._id,
+      updatedBy: req.user._id,
       ...req.body
     });
     await product.save();
@@ -51,8 +57,8 @@ const updateProduct = async (req, res) => {
 
   try {
     const product = await Product.findOneAndUpdate(
-      { _id: req.params.id, orgId: req.user.orgId },
-      req.body,
+      { _id: req.params.id, orgId: req.user.orgId, isDeleted: false },
+      { ...req.body, updatedBy: req.user._id },
       { new: true, runValidators: true }
     );
     if (!product) return res.status(404).json({ message: 'Product not found' });
@@ -67,7 +73,11 @@ const updateProduct = async (req, res) => {
 // @access  Owner/Manager/SuperManager
 const deleteProduct = async (req, res) => {
   try {
-    const product = await Product.findOneAndDelete({ _id: req.params.id, orgId: req.user.orgId });
+    const product = await Product.findOneAndUpdate(
+      { _id: req.params.id, orgId: req.user.orgId, isDeleted: false },
+      { isDeleted: true, updatedBy: req.user._id },
+      { new: true }
+    );
     if (!product) return res.status(404).json({ message: 'Product not found' });
     res.json({ message: 'Product deleted' });
   } catch (err) {
@@ -81,7 +91,7 @@ const deleteProduct = async (req, res) => {
 const listProducts = async (req, res) => {
   try {
     const { branchId, categoryId } = req.query;
-    const query = { orgId: req.user.orgId };
+    const query = { orgId: req.user.orgId, isDeleted: false };
     if (branchId) query.branchId = branchId;
     if (categoryId) query.categoryId = categoryId;
     const products = await Product.find(query).lean();

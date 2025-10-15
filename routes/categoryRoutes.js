@@ -45,7 +45,7 @@ const router = express.Router();
  *       500:
  *         description: Server error
  */
-router.post('/', authMiddleware, roleMiddleware(['Owner', 'Manager']), createCategory);
+router.post('/', authMiddleware, roleMiddleware(['Owner', 'Manager', 'SuperManager']), createCategory);
 
 /**
  * @swagger
@@ -77,7 +77,7 @@ router.post('/', authMiddleware, roleMiddleware(['Owner', 'Manager']), createCat
  *       500:
  *         description: Server error
  */
-router.put('/:id', authMiddleware, roleMiddleware(['Owner', 'Manager']), updateCategory);
+router.put('/:id', authMiddleware, roleMiddleware(['Owner', 'Manager', 'SuperManager']), updateCategory);
 
 /**
  * @swagger
@@ -96,12 +96,14 @@ router.put('/:id', authMiddleware, roleMiddleware(['Owner', 'Manager']), updateC
  *     responses:
  *       200:
  *         description: Category deleted
+ *       400:
+ *         description: Cannot delete category with associated products
  *       404:
  *         description: Category not found
  *       500:
  *         description: Server error
  */
-router.delete('/:id', authMiddleware, roleMiddleware(['Owner', 'Manager']), deleteCategory);
+router.delete('/:id', authMiddleware, roleMiddleware(['Owner', 'Manager', 'SuperManager']), deleteCategory);
 
 /**
  * @swagger
@@ -117,6 +119,6 @@ router.delete('/:id', authMiddleware, roleMiddleware(['Owner', 'Manager']), dele
  *       500:
  *         description: Server error
  */
-router.get('/', authMiddleware, roleMiddleware(['Owner', 'Manager', 'Cashier']), listCategories);
+router.get('/', authMiddleware, roleMiddleware(['Owner', 'Manager', 'Cashier', 'SuperManager']), listCategories);
 
 module.exports = router;
