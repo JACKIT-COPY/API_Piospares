@@ -1,4 +1,3 @@
-
 const express = require('express');
 const dotenv = require('dotenv');
 const connectDB = require('./config/db');
@@ -9,6 +8,7 @@ const userRoutes = require('./routes/userRoutes');
 const categoryRoutes = require('./routes/categoryRoutes');
 const productRoutes = require('./routes/productRoutes');
 const saleRoutes = require('./routes/salesRoute');
+const procurementRoutes = require('./routes/procurementRoutes');
 const swaggerUi = require('swagger-ui-express');
 const specs = require('./swagger/swagger');
 const helmet = require('helmet');
@@ -25,19 +25,19 @@ const app = express();
 // Security middleware
 app.use(helmet());
 
-// CORS - Adjust origins as needed (e.g., for your frontend)
+// CORS
 app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
 
 // Compression
 app.use(compression());
 
 // Logging
-app.use(morgan('combined')); // 'combined' for detailed logs
+app.use(morgan('combined'));
 
-// Rate limiting - Apply globally or per route; here global with window
+// Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  limit: 100, // Limit each IP to 100 requests per window
+  limit: 100,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
 });
@@ -54,11 +54,12 @@ app.use('/users', userRoutes);
 app.use('/categories', categoryRoutes);
 app.use('/products', productRoutes);
 app.use('/sales', saleRoutes);
+app.use('/procurement', procurementRoutes); // Mounted at /procurement
 
 // Swagger
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs));
 
-// Centralized error handler
+// Error handler
 app.use((err, req, res, next) => {
   console.error(err.stack);
   const status = err.status || 500;
