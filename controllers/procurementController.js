@@ -2,6 +2,7 @@ const Joi = require('joi');
 const Supplier = require('../models/Supplier');
 const PurchaseOrder = require('../models/PurchaseOrder');
 const Product = require('../models/Product');
+const Expense = require('../models/Expense');
 const User = require('../models/User');
 const mongoose = require('mongoose');
 
@@ -124,7 +125,6 @@ const listSuppliers = async (req, res) => {
 };
 
 // @desc    Create a new purchase order
-// @route   POST /procurement/purchase-orders
 // @access  Owner/Manager/SuperManager
 const createPO = async (req, res) => {
   const { error } = createPOSchema.validate(req.body);
@@ -143,10 +143,10 @@ const createPO = async (req, res) => {
     const supplier = await Supplier.findOne({ _id: req.body.supplierId, orgId: req.user.orgId, isDeleted: false });
     if (!supplier) return res.status(404).json({ message: 'Supplier not found' });
 
-    // Verify products exist
+    // Verify products exist in the branch
     for (const item of req.body.items) {
-      const product = await Product.findOne({ _id: item.productId, orgId: req.user.orgId });
-      if (!product) return res.status(404).json({ message: `Product ${item.productId} not found` });
+      const product = await Product.findOne({ _id: item.productId, orgId: req.user.orgId, branchId: req.body.branchId });
+      if (!product) return res.status(404).json({ message: `Product ${item.productId} not found in the branch` });
     }
 
     const totalCost = req.body.items.reduce((sum, item) => sum + item.quantity * item.buyingPrice, 0);
@@ -178,8 +178,8 @@ const updatePO = async (req, res) => {
 
     if (req.body.items) {
       for (const item of req.body.items) {
-        const product = await Product.findOne({ _id: item.productId, orgId: req.user.orgId });
-        if (!product) return res.status(404).json({ message: `Product ${item.productId} not found` });
+        const product = await Product.findOne({ _id: item.productId, orgId: req.user.orgId, branchId: po.branchId });
+        if (!product) return res.status(404).json({ message: `Product ${item.productId} not found in the branch` });
       }
       req.body.totalCost = req.body.items.reduce((sum, item) => sum + item.quantity * item.buyingPrice, 0);
     }
@@ -259,9 +259,9 @@ const receiveGoods = async (req, res) => {
       poItem.receivedQuantity = receivedItem.receivedQuantity;
       if (poItem.receivedQuantity < poItem.quantity) fullyReceived = false;
 
-      //TODO : Ensure we are correctly updating inventory for the correct branch
-
       if (increment > 0) {
+        const product = await Product.findOne({ _id: poItem.productId, orgId: req.user.orgId, branchId: po.branchId }).session(session);
+        if (!product) throw new Error(`Product ${poItem.productId} not found in branch ${po.branchId}`);
         await Product.findOneAndUpdate(
           { _id: poItem.productId, orgId: req.user.orgId, branchId: po.branchId },
           { $inc: { stock: increment }, $set: { buyingPrice: poItem.buyingPrice } },
@@ -273,6 +273,24 @@ const receiveGoods = async (req, res) => {
     po.status = fullyReceived ? 'received' : 'ordered';
     po.updatedBy = req.user.userId;
     await po.save({ session });
+
+    // Auto-create expense if fully received
+    if (fullyReceived) {
+      const expense = new Expense({
+        orgId: req.user.orgId,
+        branchId: po.branchId,
+        category: 'Procurement',
+        subCategory: 'InventoryPurchase',
+        amount: po.totalCost,
+        description: `Expense for PO ${po._id} from supplier ${po.supplierId}`,
+        dateIncurred: new Date(),
+        status: 'Pending',
+        referenceId: po._id,
+        createdBy: req.user.userId,
+        updatedBy: req.user.userId
+      });
+      await expense.save({ session });
+    }
 
     await session.commitTransaction();
     res.json(po);
