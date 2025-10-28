@@ -14,6 +14,10 @@ const saleSchema = new mongoose.Schema({
   discount: { type: Number, default: 0 },
   paymentMethod: { type: String, enum: ['cash', 'mpesa', 'pending'], required: true },
   status: { type: String, enum: ['completed', 'pending', 'returned'], default: 'completed' },
+  // Add to Sale schema
+stkRequestID: { type: String, default: null },  // CheckoutRequestID
+phoneNumber: { type: String, default: null },   // For mpesa
+receiptNumber: { type: String, default: null }, // Post-callback
 }, { timestamps: true });
 
 saleSchema.index({ orgId: 1, branchId: 1, userId: 1 });

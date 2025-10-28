@@ -1,6 +1,7 @@
 const Joi = require('joi');
 const Sale = require('../models/Sale');
 const Product = require('../models/Product');
+const { initiateSTKPush } = require('./mpesaController');  // Adjust path
 
 // Validation schema for sale creation
 const createSchema = Joi.object({
@@ -15,6 +16,7 @@ const createSchema = Joi.object({
   discount: Joi.number().min(0).optional(),
   paymentMethod: Joi.string().valid('cash', 'mpesa', 'pending').required(),
   branchId: Joi.string().required(),
+  phoneNumber: Joi.when('paymentMethod', { is: 'mpesa', then: Joi.string().pattern(/^(254[17]\d{8})$/).required() }),
 });
 
 // Validation schema for updating sale status
