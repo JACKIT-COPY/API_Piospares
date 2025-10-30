@@ -1,158 +1,234 @@
+const mongoose = require('mongoose');
 const Joi = require('joi');
 const Sale = require('../models/Sale');
 const Product = require('../models/Product');
-const { initiateSTKPush } = require('./mpesaController');  // Adjust path
+const { initiateSTKPush } = require('./mpesaController');
 
-// Validation schema for sale creation
+// ──────────────────────────────────────────────────────────────
+// Joi Schemas
+// ──────────────────────────────────────────────────────────────
 const createSchema = Joi.object({
-  products: Joi.array().items(
-    Joi.object({
-      productId: Joi.string().required(),
-      name: Joi.string().required(),
-      price: Joi.number().positive().required(),
-      quantity: Joi.number().integer().min(1).required(),
-    })
-  ).min(1).required(),
+  products: Joi.array()
+    .items(
+      Joi.object({
+        productId: Joi.string().required(),
+        name: Joi.string().required(),
+        price: Joi.number().positive().required(),
+        quantity: Joi.number().integer().min(1).required(),
+      })
+    )
+    .min(1)
+    .required(),
   discount: Joi.number().min(0).optional(),
   paymentMethod: Joi.string().valid('cash', 'mpesa', 'pending').required(),
   branchId: Joi.string().required(),
-  phoneNumber: Joi.when('paymentMethod', { is: 'mpesa', then: Joi.string().pattern(/^(254[17]\d{8})$/).required() }),
+  phoneNumber: Joi.when('paymentMethod', {
+    is: 'mpesa',
+    then: Joi.string().pattern(/^254[17]\d{8}$/).required(),
+    otherwise: Joi.forbidden(),
+  }),
 });
 
-// Validation schema for updating sale status
 const updateStatusSchema = Joi.object({
   status: Joi.string().valid('completed', 'pending', 'returned').required(),
-  paymentMethod: Joi.string().valid('cash', 'mpesa').when('status', { is: 'completed', then: Joi.required() }),
+  paymentMethod: Joi.string()
+    .valid('cash', 'mpesa')
+    .when('status', { is: 'completed', then: Joi.required() }),
 });
 
-// @desc    Create a new sale
-// @route   POST /sales
-// @access  Owner/Manager/Cashier/SuperManager
-const createSale = async (req, res) => {
-  const { error } = createSchema.validate(req.body);
-  if (error) return res.status(400).json({ message: error.details[0].message });
-
+// ──────────────────────────────────────────────────────────────
+// INTERNAL: reusable stock + status change (used by callback)
+// ──────────────────────────────────────────────────────────────
+const updateSaleStatusInternal = async (saleId, newStatus, paymentMethod = null, receipt = null) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
   try {
-    // Ensure user is authenticated
-    if (!req.user || !req.user.userId) {
-      return res.status(401).json({ message: 'User not authenticated' });
-    }
+    const sale = await Sale.findById(saleId).session(session);
+    if (!sale) throw new Error('Sale not found');
 
-    const { products, discount, paymentMethod, branchId } = req.body;
-
-    // Verify stock availability and branch consistency
-    for (const item of products) {
-      const product = await Product.findById(item.productId);
-      if (!product || product.orgId.toString() !== req.user.orgId) {
-        return res.status(404).json({ message: `Product ${item.name} not found` });
-      }
-      if (product.branchId.toString() !== branchId) {
-        return res.status(400).json({ message: `Product ${item.name} does not belong to branch ${branchId}` });
-      }
-      if (product.stock < item.quantity) {
-        return res.status(400).json({ message: `Insufficient stock for ${item.name}` });
+    // ---- STOCK DEDUCTION (pending → completed) ----
+    if (newStatus === 'completed' && sale.status === 'pending') {
+      for (const item of sale.products) {
+        const prod = await Product.findOneAndUpdate(
+          { _id: item.productId, stock: { $gte: item.quantity } },
+          { $inc: { stock: -item.quantity } },
+          { new: true, session }
+        );
+        if (!prod) throw new Error(`Insufficient stock for ${item.name}`);
       }
     }
 
-    // Calculate total
-    const total = products.reduce((sum, item) => sum + item.price * item.quantity, 0);
-    const finalTotal = total - (discount || 0);
-
-    // Create sale
-    const sale = new Sale({
-      orgId: req.user.orgId,
-      branchId,
-      userId: req.user.userId,
-      products,
-      total: finalTotal,
-      discount: discount || 0,
-      paymentMethod,
-      status: paymentMethod === 'pending' ? 'pending' : 'completed',
-    });
-
-    // Update stock if completed
-    if (paymentMethod !== 'pending') {
-      for (const item of products) {
+    // ---- RESTOCK (any → returned) ----
+    if (newStatus === 'returned' && sale.status !== 'returned') {
+      for (const item of sale.products) {
         await Product.findByIdAndUpdate(
           item.productId,
-          { $inc: { stock: -item.quantity } },
-          { runValidators: true }
+          { $inc: { stock: item.quantity } },
+          { session }
         );
       }
     }
 
-    await sale.save();
-    res.status(201).json(sale);
+    // ---- UPDATE SALE ----
+    sale.status = newStatus;
+    if (paymentMethod) sale.paymentMethod = paymentMethod;
+    if (receipt) sale.receiptNumber = receipt;
+
+    await sale.save({ session });
+    await session.commitTransaction();
+    return sale;
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    await session.abortTransaction();
+    throw err;
+  } finally {
+    session.endSession();
   }
 };
 
-// @desc    List sales for organization
-// @route   GET /sales
-// @access  Owner/Manager/Cashier/SuperManager
+// ──────────────────────────────────────────────────────────────
+// PUBLIC: createSale
+// ──────────────────────────────────────────────────────────────
+const createSale = async (req, res) => {
+  const { error } = createSchema.validate(req.body);
+  if (error) return res.status(400).json({ message: error.details[0].message });
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { products, discount = 0, paymentMethod, branchId, phoneNumber } = req.body;
+    const user = req.user;
+
+    // ---- 1. Enrich & validate products (price from DB) ----
+    let total = 0;
+    const enriched = [];
+
+    for (const it of products) {
+      const prod = await Product.findOne({
+        _id: it.productId,
+        orgId: user.orgId,
+        branchId,
+      }).session(session);
+
+      if (!prod) throw new Error(`Product ${it.name} not found`);
+      if (prod.price !== it.price) throw new Error(`Price tampering on ${it.name}`);
+
+      if (prod.stock < it.quantity) throw new Error(`Insufficient stock for ${it.name}`);
+
+      total += prod.price * it.quantity;
+      enriched.push({
+        productId: prod._id,
+        name: prod.name,
+        price: prod.price,
+        quantity: it.quantity,
+      });
+    }
+
+    if (discount > total) throw new Error('Discount cannot exceed total');
+    const finalTotal = total - discount;
+
+    // ---- 2. Create sale (pending if mpesa/pending) ----
+    const sale = new Sale({
+      orgId: user.orgId,
+      branchId,
+      userId: user.userId,
+      products: enriched,
+      total: finalTotal,
+      discount,
+      paymentMethod,
+      status: paymentMethod === 'pending' ? 'pending' : 'completed',
+      phoneNumber: paymentMethod === 'mpesa' ? phoneNumber : null,
+    });
+
+    await sale.save({ session });
+
+    // ---- 3. Deduct stock for CASH / COMPLETED (not pending/mpesa) ----
+    if (paymentMethod === 'cash') {
+      for (const it of enriched) {
+        await Product.findByIdAndUpdate(
+          it.productId,
+          { $inc: { stock: -it.quantity } },
+          { session }
+        );
+      }
+    }
+
+    await session.commitTransaction();
+
+    // ---- 4. M-PESA STK PUSH (fire-and-forget, store request ID) ----
+    let stkResponse = null;
+    if (paymentMethod === 'mpesa') {
+      try {
+        stkResponse = await initiateSTKPush(phoneNumber, finalTotal, sale._id.toString());
+        await Sale.findByIdAndUpdate(
+          sale._id,
+          { stkRequestID: stkResponse.CheckoutRequestID },
+          { new: true }
+        );
+      } catch (stkErr) {
+        console.error('STK push failed →', stkErr.response?.data || stkErr);
+        // Still return sale – cashier can retry later
+        return res.status(201).json({
+          sale,
+          mpesa: { error: 'STK push failed – retry later' },
+        });
+      }
+    }
+
+    res.status(201).json({ sale, mpesa: stkResponse });
+  } catch (err) {
+    await session.abortTransaction();
+    res.status(400).json({ message: err.message });
+  } finally {
+    session.endSession();
+  }
+};
+
+// ──────────────────────────────────────────────────────────────
+// PUBLIC: listSales (with pagination)
+// ──────────────────────────────────────────────────────────────
 const listSales = async (req, res) => {
   try {
-    const { branchId, status } = req.query;
+    const { branchId, status, page = 1, limit = 20 } = req.query;
     const query = { orgId: req.user.orgId };
     if (branchId) query.branchId = branchId;
     if (status) query.status = status;
-    const sales = await Sale.find(query).lean();
-    res.json(sales);
+
+    const sales = await Sale.find(query)
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(Number(limit))
+      .lean();
+
+    const total = await Sale.countDocuments(query);
+    res.json({ sales, pagination: { page: Number(page), limit: Number(limit), total } });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
 
-// @desc    Update sale status
-// @route   PUT /sales/:id
-// @access  Owner/Manager/SuperManager
+// ──────────────────────────────────────────────────────────────
+// PUBLIC: updateSaleStatus (manual)
+// ──────────────────────────────────────────────────────────────
 const updateSaleStatus = async (req, res) => {
   const { error } = updateStatusSchema.validate(req.body);
   if (error) return res.status(400).json({ message: error.details[0].message });
 
   try {
-    const sale = await Sale.findOne({ _id: req.params.id, orgId: req.user.orgId });
-    if (!sale) return res.status(404).json({ message: 'Sale not found' });
-
-    // If updating to completed, update stock
-    if (req.body.status === 'completed' && sale.status === 'pending') {
-      for (const item of sale.products) {
-        const product = await Product.findById(item.productId);
-        if (!product) return res.status(404).json({ message: `Product ${item.name} not found` });
-        if (product.stock < item.quantity) {
-          return res.status(400).json({ message: `Insufficient stock for ${item.name}` });
-        }
-        await Product.findByIdAndUpdate(
-          item.productId,
-          { $inc: { stock: -item.quantity } },
-          { runValidators: true }
-        );
-      }
-    }
-
-    // If updating to returned, restock products
-    if (req.body.status === 'returned' && sale.status !== 'returned') {
-      for (const item of sale.products) {
-        const product = await Product.findById(item.productId);
-        if (!product) return res.status(404).json({ message: `Product ${item.name} not found` });
-        await Product.findByIdAndUpdate(
-          item.productId,
-          { $inc: { stock: item.quantity } },
-          { runValidators: true }
-        );
-      }
-    }
-
-    sale.status = req.body.status;
-    if (req.body.status === 'completed') {
-      sale.paymentMethod = req.body.paymentMethod;
-    }
-    await sale.save();
+    const sale = await updateSaleStatusInternal(
+      req.params.id,
+      req.body.status,
+      req.body.paymentMethod || null
+    );
     res.json(sale);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    res.status(err.message.includes('not found') ? 404 : 400).json({ message: err.message });
   }
 };
 
-module.exports = { createSale, listSales, updateSaleStatus };
+module.exports = {
+  createSale,
+  listSales,
+  updateSaleStatus,
+  updateSaleStatusInternal, // ← used by callback
+};
