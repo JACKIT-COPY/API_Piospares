@@ -99,7 +99,7 @@ const createSale = async (req, res) => {
     const { products, discount = 0, paymentMethod, branchId, phoneNumber } = req.body;
     const user = req.user;
 
-    // ---- 1. Enrich & validate products (price from DB) ----
+    // ---- 1. Enrich & validate products ----
     let total = 0;
     const enriched = [];
 
@@ -112,7 +112,6 @@ const createSale = async (req, res) => {
 
       if (!prod) throw new Error(`Product ${it.name} not found`);
       if (prod.price !== it.price) throw new Error(`Price tampering on ${it.name}`);
-
       if (prod.stock < it.quantity) throw new Error(`Insufficient stock for ${it.name}`);
 
       total += prod.price * it.quantity;
@@ -127,7 +126,8 @@ const createSale = async (req, res) => {
     if (discount > total) throw new Error('Discount cannot exceed total');
     const finalTotal = total - discount;
 
-    // ---- 2. Create sale (pending if mpesa/pending) ----
+    // ---- 2. Create sale (pending for mpesa/pending, completed for cash) ----
+    const isPendingPayment = paymentMethod === 'pending' || paymentMethod === 'mpesa';
     const sale = new Sale({
       orgId: user.orgId,
       branchId,
@@ -136,13 +136,13 @@ const createSale = async (req, res) => {
       total: finalTotal,
       discount,
       paymentMethod,
-      status: paymentMethod === 'pending' ? 'pending' : 'completed',
+      status: isPendingPayment ? 'pending' : 'completed',  // ← FIX: pending for mpesa
       phoneNumber: paymentMethod === 'mpesa' ? phoneNumber : null,
     });
 
     await sale.save({ session });
 
-    // ---- 3. Deduct stock for CASH / COMPLETED (not pending/mpesa) ----
+    // ---- 3. Deduct stock ONLY for cash ----
     if (paymentMethod === 'cash') {
       for (const it of enriched) {
         await Product.findByIdAndUpdate(
@@ -155,23 +155,24 @@ const createSale = async (req, res) => {
 
     await session.commitTransaction();
 
-    // ---- 4. M-PESA STK PUSH (fire-and-forget, store request ID) ----
+    // ---- 4. M-PESA STK PUSH (async, after commit) ----
     let stkResponse = null;
     if (paymentMethod === 'mpesa') {
       try {
         stkResponse = await initiateSTKPush(phoneNumber, finalTotal, sale._id.toString());
-        await Sale.findByIdAndUpdate(
-          sale._id,
-          { stkRequestID: stkResponse.CheckoutRequestID },
-          { new: true }
-        );
+        // Update stkRequestID (new session, no transaction needed)
+        await Sale.findByIdAndUpdate(sale._id, { stkRequestID: stkResponse.CheckoutRequestID });
+        console.log(`STK Push Success: ${stkResponse.CheckoutRequestID}`);
       } catch (stkErr) {
-        console.error('STK push failed →', stkErr.response?.data || stkErr);
-        // Still return sale – cashier can retry later
-        return res.status(201).json({
-          sale,
-          mpesa: { error: 'STK push failed – retry later' },
+        console.error('STK Push Failed:', {
+          error: stkErr.message,
+          response: stkErr.response?.data,
+          status: stkErr.response?.status,
+          phone: phoneNumber,
+          amount: finalTotal,
         });
+        // Keep pending – return error for retry
+        stkResponse = { error: 'STK push failed. Sale pending – retry or complete manually.' };
       }
     }
 
@@ -183,6 +184,7 @@ const createSale = async (req, res) => {
     session.endSession();
   }
 };
+
 
 // ──────────────────────────────────────────────────────────────
 // PUBLIC: listSales (with pagination)

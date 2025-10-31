@@ -25,6 +25,9 @@ connectDB();
 
 const app = express();
 
+// 👇 Add this line
+app.set('trust proxy', 1); // trust first proxy (ngrok, render, etc.)
+
 // Security middleware
 app.use(helmet());
 

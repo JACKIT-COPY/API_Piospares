@@ -11,9 +11,16 @@ const {
   MPESA_IS_SANDBOX = 'true',
 } = process.env;
 
-const BASE_URL = MPESA_IS_SANDBOX === 'true'
-  ? 'https://sandbox.safaricom.co.ke/mpesa'
-  : 'https://api.safaricom.co.ke/mpesa';
+// FIX: Normalize to boolean
+const IS_SANDBOX = String(MPESA_IS_SANDBOX).toLowerCase() === 'true';
+
+const BASE_URL = IS_SANDBOX
+  ? 'https://sandbox.safaricom.co.ke/'
+  : 'https://api.safaricom.co.ke/';
+
+// const BASE_URL = MPESA_IS_SANDBOX === 'true'
+//   ? 'https://sandbox.safaricom.co.ke/mpesa'
+//   : 'https://api.safaricom.co.ke/mpesa';
 
 // ──────────────────────────────────────────────────────────────
 // Helper utils
@@ -51,7 +58,7 @@ const initiateSTKPush = async (phoneNumber, amount, saleId, desc = 'POS Sale') =
     TransactionDesc: desc,
   };
 
-  const { data } = await axios.post(`${BASE_URL}/stkpush/v1/processrequest`, payload, {
+  const { data } = await axios.post(`${BASE_URL}/mpesa/stkpush/v1/processrequest`, payload, {
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
   });
   return data; // { CheckoutRequestID, ResponseCode, CustomerMessage, ... }
@@ -68,10 +75,10 @@ const handleCallback = async (req, res) => {
     const cb = Body.stkCallback;
     console.log('M-Pesa Callback →', JSON.stringify(cb, null, 2));
 
-    // ---- ACKNOWLEDGE IMMEDIATELY ----
+    // Acknowledge immediately
     res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
 
-    // ---- PROCESS ASYNC ----
+    // Process async
     if (cb.ResultCode !== 0) {
       console.warn('M-Pesa payment failed →', cb.ResultDesc);
       return;
@@ -81,13 +88,17 @@ const handleCallback = async (req, res) => {
     const amount = items.find(i => i.Name === 'Amount')?.Value ?? 0;
     const receipt = items.find(i => i.Name === 'MpesaReceiptNumber')?.Value ?? null;
     const phone = items.find(i => i.Name === 'PhoneNumber')?.Value ?? null;
-    const saleId = cb.MerchantRequestID; // we set AccountReference = saleId → comes back as MerchantRequestID
+    const checkoutId = cb.CheckoutRequestID;  // ← FIX: Use CheckoutRequestID
 
     const Sale = require('../models/Sale');
-    const sale = await Sale.findOne({ _id: saleId, status: 'pending', paymentMethod: 'mpesa' });
+    const sale = await Sale.findOne({ 
+      stkRequestID: checkoutId,  // ← FIX: Match stkRequestID
+      status: 'pending', 
+      paymentMethod: 'mpesa' 
+    });
 
     if (!sale) {
-      console.error('Sale not found for callback →', saleId);
+      console.error('Sale not found for callback →', { checkoutId, amount });
       return;
     }
     if (Number(amount) !== Number(sale.total)) {
@@ -95,12 +106,13 @@ const handleCallback = async (req, res) => {
       return;
     }
 
-    // ---- UPDATE SALE (reuse internal function) ----
-    await updateSaleStatusInternal(saleId, 'completed', 'mpesa', receipt);
-    console.log(`Sale ${saleId} completed – receipt ${receipt}`);
+    // Update to completed (deducts stock)
+    await updateSaleStatusInternal(sale._id, 'completed', 'mpesa', receipt);
+    console.log(`Sale ${sale._id} completed via M-Pesa – receipt ${receipt}`);
   } catch (err) {
     console.error('Callback processing error →', err);
   }
 };
+
 
 module.exports = { initiateSTKPush, handleCallback };
