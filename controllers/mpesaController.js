@@ -1,6 +1,6 @@
 const axios = require('axios');
 require('dotenv').config();
-const { updateSaleStatusInternal } = require('./salesController'); // <-- NEW
+const { updateSaleStatusInternal } = require('./salesController');
 
 const {
   MPESA_CONSUMER_KEY,
@@ -9,11 +9,20 @@ const {
   MPESA_PASS_KEY,
   MPESA_CALLBACK_URL,
   MPESA_IS_SANDBOX = 'true',
+  MPESA_IS_SANDBOX = 'true',
 } = process.env;
 
-const BASE_URL = MPESA_IS_SANDBOX === 'true'
-  ? 'https://sandbox.safaricom.co.ke/mpesa'
-  : 'https://api.safaricom.co.ke/mpesa';
+// FIX: Base URL without /mpesa
+const IS_SANDBOX = String(MPESA_IS_SANDBOX).toLowerCase() === 'true';
+const BASE_URL = IS_SANDBOX
+  ? 'https://sandbox.safaricom.co.ke'
+  : 'https://api.safaricom.co.ke';
+
+// ──────────────────────────────────────────────────────────────
+// Helper utils
+// ──────────────────────────────────────────────────────────────
+const getTimestamp = () => new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+const getPassword = ts => Buffer.from(`${MPESA_SHORT_CODE}${MPESA_PASS_KEY}${ts}`).toString('base64');
 
 // ──────────────────────────────────────────────────────────────
 // Helper utils
@@ -22,13 +31,26 @@ const getTimestamp = () => new Date().toISOString().replace(/[-:T]/g, '').slice(
 const getPassword = ts => Buffer.from(`${MPESA_SHORT_CODE}${MPESA_PASS_KEY}${ts}`).toString('base64');
 
 const getAccessToken = async () => {
-  const auth = Buffer.from(`${MPESA_CONSUMER_KEY}:${MPESA_CONSUMER_SECRET}`).toString('base64');
-  const { data } = await axios.get(`${BASE_URL}/oauth/v1/generate?grant_type=client_credentials`, {
-    headers: { Authorization: `Basic ${auth}` },
-  });
-  return data.access_token;
+  try {
+    const auth = Buffer.from(`${MPESA_CONSUMER_KEY}:${MPESA_CONSUMER_SECRET}`).toString('base64');
+    const { data } = await axios.get(`${BASE_URL}/oauth/v1/generate?grant_type=client_credentials`, {
+      headers: { Authorization: `Basic ${auth}` },
+    });
+    return data.access_token;
+  } catch (err) {
+    console.error('M-Pesa Access Token Error:', {
+      message: err.message,
+      response: err.response?.data,
+      status: err.response?.status,
+    });
+    throw err; // Bubble up
+  }
 };
 
+// ──────────────────────────────────────────────────────────────
+// PUBLIC: initiate STK push
+// ──────────────────────────────────────────────────────────────
+const initiateSTKPush = async (phoneNumber, amount, saleId, desc = 'POS Sale') => {
 // ──────────────────────────────────────────────────────────────
 // PUBLIC: initiate STK push
 // ──────────────────────────────────────────────────────────────
@@ -36,7 +58,9 @@ const initiateSTKPush = async (phoneNumber, amount, saleId, desc = 'POS Sale') =
   const timestamp = getTimestamp();
   const password = getPassword(timestamp);
   const token = await getAccessToken();
+  const token = await getAccessToken();
 
+  const payload = {
   const payload = {
     BusinessShortCode: MPESA_SHORT_CODE,
     Password: password,
@@ -47,16 +71,29 @@ const initiateSTKPush = async (phoneNumber, amount, saleId, desc = 'POS Sale') =
     PartyB: MPESA_SHORT_CODE,
     PhoneNumber: phoneNumber,
     CallBackURL: MPESA_CALLBACK_URL,
-    AccountReference: saleId,          // <-- SALE ID
+    AccountReference: saleId,
     TransactionDesc: desc,
   };
 
-  const { data } = await axios.post(`${BASE_URL}/stkpush/v1/processrequest`, payload, {
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-  });
-  return data; // { CheckoutRequestID, ResponseCode, CustomerMessage, ... }
+  try {
+    const { data } = await axios.post(`${BASE_URL}/mpesa/stkpush/v1/processrequest`, payload, {
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    });
+    return data;
+  } catch (err) {
+    console.error('M-Pesa STK Push Error:', {
+      message: err.message,
+      response: err.response?.data,
+      status: err.response?.status,
+      payload: payload, // For debug
+    });
+    throw err;
+  }
 };
 
+// ──────────────────────────────────────────────────────────────
+// PUBLIC: callback from Safaricom
+// ──────────────────────────────────────────────────────────────
 // ──────────────────────────────────────────────────────────────
 // PUBLIC: callback from Safaricom
 // ──────────────────────────────────────────────────────────────
@@ -64,16 +101,15 @@ const handleCallback = async (req, res) => {
   try {
     const { Body } = req.body;
     if (!Body?.stkCallback) return res.json({ ResultCode: 1, ResultDesc: 'Bad payload' });
+    if (!Body?.stkCallback) return res.json({ ResultCode: 1, ResultDesc: 'Bad payload' });
 
     const cb = Body.stkCallback;
-    console.log('M-Pesa Callback →', JSON.stringify(cb, null, 2));
+    console.log('M-Pesa Callback:', JSON.stringify(cb, null, 2));
 
-    // ---- ACKNOWLEDGE IMMEDIATELY ----
     res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
 
-    // ---- PROCESS ASYNC ----
     if (cb.ResultCode !== 0) {
-      console.warn('M-Pesa payment failed →', cb.ResultDesc);
+      console.warn('M-Pesa payment failed:', cb.ResultDesc);
       return;
     }
 
@@ -81,26 +117,30 @@ const handleCallback = async (req, res) => {
     const amount = items.find(i => i.Name === 'Amount')?.Value ?? 0;
     const receipt = items.find(i => i.Name === 'MpesaReceiptNumber')?.Value ?? null;
     const phone = items.find(i => i.Name === 'PhoneNumber')?.Value ?? null;
-    const saleId = cb.MerchantRequestID; // we set AccountReference = saleId → comes back as MerchantRequestID
+    const checkoutId = cb.CheckoutRequestID;
 
     const Sale = require('../models/Sale');
-    const sale = await Sale.findOne({ _id: saleId, status: 'pending', paymentMethod: 'mpesa' });
+    const sale = await Sale.findOne({ 
+      stkRequestID: checkoutId,
+      status: 'pending', 
+      paymentMethod: 'mpesa' 
+    });
 
     if (!sale) {
-      console.error('Sale not found for callback →', saleId);
+      console.error('Sale not found for callback:', { checkoutId, amount });
       return;
     }
     if (Number(amount) !== Number(sale.total)) {
-      console.error('Amount mismatch →', { expected: sale.total, received: amount });
+      console.error('Amount mismatch:', { expected: sale.total, received: amount });
       return;
     }
 
-    // ---- UPDATE SALE (reuse internal function) ----
-    await updateSaleStatusInternal(saleId, 'completed', 'mpesa', receipt);
-    console.log(`Sale ${saleId} completed – receipt ${receipt}`);
+    await updateSaleStatusInternal(sale._id, 'completed', 'mpesa', receipt);
+    console.log(`Sale ${sale._id} completed via M-Pesa – receipt ${receipt}`);
   } catch (err) {
-    console.error('Callback processing error →', err);
+    console.error('Callback processing error:', err);
   }
 };
 
+module.exports = { initiateSTKPush, handleCallback };
 module.exports = { initiateSTKPush, handleCallback };
