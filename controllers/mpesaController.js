@@ -9,7 +9,6 @@ const {
   MPESA_PASS_KEY,
   MPESA_CALLBACK_URL,
   MPESA_IS_SANDBOX = 'true',
-  MPESA_IS_SANDBOX = 'true',
 } = process.env;
 
 // FIX: Base URL without /mpesa
@@ -17,12 +16,6 @@ const IS_SANDBOX = String(MPESA_IS_SANDBOX).toLowerCase() === 'true';
 const BASE_URL = IS_SANDBOX
   ? 'https://sandbox.safaricom.co.ke'
   : 'https://api.safaricom.co.ke';
-
-// ──────────────────────────────────────────────────────────────
-// Helper utils
-// ──────────────────────────────────────────────────────────────
-const getTimestamp = () => new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
-const getPassword = ts => Buffer.from(`${MPESA_SHORT_CODE}${MPESA_PASS_KEY}${ts}`).toString('base64');
 
 // ──────────────────────────────────────────────────────────────
 // Helper utils
@@ -51,16 +44,10 @@ const getAccessToken = async () => {
 // PUBLIC: initiate STK push
 // ──────────────────────────────────────────────────────────────
 const initiateSTKPush = async (phoneNumber, amount, saleId, desc = 'POS Sale') => {
-// ──────────────────────────────────────────────────────────────
-// PUBLIC: initiate STK push
-// ──────────────────────────────────────────────────────────────
-const initiateSTKPush = async (phoneNumber, amount, saleId, desc = 'POS Sale') => {
   const timestamp = getTimestamp();
   const password = getPassword(timestamp);
   const token = await getAccessToken();
-  const token = await getAccessToken();
 
-  const payload = {
   const payload = {
     BusinessShortCode: MPESA_SHORT_CODE,
     Password: password,
@@ -94,13 +81,9 @@ const initiateSTKPush = async (phoneNumber, amount, saleId, desc = 'POS Sale') =
 // ──────────────────────────────────────────────────────────────
 // PUBLIC: callback from Safaricom
 // ──────────────────────────────────────────────────────────────
-// ──────────────────────────────────────────────────────────────
-// PUBLIC: callback from Safaricom
-// ──────────────────────────────────────────────────────────────
 const handleCallback = async (req, res) => {
   try {
     const { Body } = req.body;
-    if (!Body?.stkCallback) return res.json({ ResultCode: 1, ResultDesc: 'Bad payload' });
     if (!Body?.stkCallback) return res.json({ ResultCode: 1, ResultDesc: 'Bad payload' });
 
     const cb = Body.stkCallback;
@@ -142,5 +125,4 @@ const handleCallback = async (req, res) => {
   }
 };
 
-module.exports = { initiateSTKPush, handleCallback };
 module.exports = { initiateSTKPush, handleCallback };
