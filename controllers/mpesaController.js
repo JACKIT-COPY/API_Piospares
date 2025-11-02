@@ -1,7 +1,6 @@
 const axios = require('axios');
 require('dotenv').config();
-const { updateSaleStatusInternal } = require('./salesController');
-
+const { updateSaleStatusInternal } = require('./saleService');  // ← CHANGE
 const {
   MPESA_CONSUMER_KEY,
   MPESA_CONSUMER_SECRET,
