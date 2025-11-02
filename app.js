@@ -25,8 +25,8 @@ connectDB();
 
 const app = express();
 
-// Trust proxy (fixes express-rate-limit warning)
-app.set('trust proxy', 1);
+// 👇 Add this line
+app.set('trust proxy', 1); // trust first proxy (ngrok, render, etc.)
 
 // Security middleware
 app.use(helmet());
