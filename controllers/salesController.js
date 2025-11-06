@@ -100,8 +100,8 @@ const createSale = async (req, res) => {
 
     await sale.save({ session });
 
-    // ---- 4. Deduct stock ONLY for cash ----
-    if (paymentMethod === 'cash') {
+// ---- 4. Deduct stock for cash/paybill ----
+    if (paymentMethod === 'cash' || paymentMethod === 'paybill') {
       for (const it of enriched) {
         await Product.findByIdAndUpdate(
           it.productId,
