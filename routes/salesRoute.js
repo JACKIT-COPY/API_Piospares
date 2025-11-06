@@ -33,7 +33,7 @@ const router = express.Router();
  *           type: number
  *         paymentMethod:
  *           type: string
- *           enum: [cash, mpesa, pending]
+ *           enum: [cash, mpesa, paybill, pending]
  *         branchId:
  *           type: string
  *     SaleUpdateStatus:
@@ -46,7 +46,7 @@ const router = express.Router();
  *           enum: [completed, pending, returned]
  *         paymentMethod:
  *           type: string
- *           enum: [cash, mpesa]
+ *           enum: [cash, mpesa, paybill]
  */
 
 /**

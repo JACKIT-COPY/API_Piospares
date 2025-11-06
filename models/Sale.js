@@ -12,7 +12,7 @@ const saleSchema = new mongoose.Schema({
   }],
   total: { type: Number, required: true },
   discount: { type: Number, default: 0 },
-  paymentMethod: { type: String, enum: ['cash', 'mpesa', 'pending'], required: true },
+  paymentMethod: { type: String, enum: ['cash', 'mpesa', 'pending', 'paybill'], required: true },  // ← ADD 'paybill
   status: { type: String, enum: ['completed', 'pending', 'returned'], default: 'completed' },
   // Add to Sale schema
 stkRequestID: { type: String, default: null },  // CheckoutRequestID

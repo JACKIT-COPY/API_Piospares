@@ -20,7 +20,7 @@ const createSchema = Joi.object({
     .min(1)
     .required(),
   discount: Joi.number().min(0).optional(),
-  paymentMethod: Joi.string().valid('cash', 'mpesa', 'pending').required(),
+  paymentMethod: Joi.string().valid('cash', 'mpesa', 'paybill', 'pending').required(),
   branchId: Joi.string().required(),
   phoneNumber: Joi.when('paymentMethod', {
     is: 'mpesa',
@@ -99,7 +99,7 @@ const createSale = async (req, res) => {
     const { products, discount = 0, paymentMethod, branchId, phoneNumber } = req.body;
     const user = req.user;
 
-    // ---- 1. Enrich & validate products ----
+    // ---- 1. Enrich & validate products (price from DB) ----
     let total = 0;
     const enriched = [];
 
@@ -111,7 +111,9 @@ const createSale = async (req, res) => {
       }).session(session);
 
       if (!prod) throw new Error(`Product ${it.name} not found`);
-      if (prod.price !== it.price) throw new Error(`Price tampering on ${it.name}`);
+      if (prod.price !== it.price) {
+        return res.status(400).json({ message: `Price mismatch for ${it.name}` });
+      }
       if (prod.stock < it.quantity) throw new Error(`Insufficient stock for ${it.name}`);
 
       total += prod.price * it.quantity;
@@ -126,7 +128,7 @@ const createSale = async (req, res) => {
     if (discount > total) throw new Error('Discount cannot exceed total');
     const finalTotal = total - discount;
 
-    // ---- 2. Create sale (pending for mpesa/pending, completed for cash) ----
+    // ---- 2. Create sale ----
     const isPendingPayment = paymentMethod === 'pending' || paymentMethod === 'mpesa';
     const sale = new Sale({
       orgId: user.orgId,
@@ -136,14 +138,14 @@ const createSale = async (req, res) => {
       total: finalTotal,
       discount,
       paymentMethod,
-      status: isPendingPayment ? 'pending' : 'completed',  // ← FIX: pending for mpesa
+      status: isPendingPayment ? 'pending' : 'completed',  // ← 'paybill' treated as immediate (completed)
       phoneNumber: paymentMethod === 'mpesa' ? phoneNumber : null,
     });
 
     await sale.save({ session });
 
-    // ---- 3. Deduct stock ONLY for cash ----
-    if (paymentMethod === 'cash') {
+    // ---- 3. Deduct stock for cash/paybill ----
+    if (paymentMethod === 'cash' || paymentMethod === 'paybill') {
       for (const it of enriched) {
         await Product.findByIdAndUpdate(
           it.productId,
@@ -155,12 +157,11 @@ const createSale = async (req, res) => {
 
     await session.commitTransaction();
 
-    // ---- 4. M-PESA STK PUSH (async, after commit) ----
+    // ---- 4. M-PESA STK PUSH (only for mpesa) ----
     let stkResponse = null;
     if (paymentMethod === 'mpesa') {
       try {
         stkResponse = await initiateSTKPush(phoneNumber, finalTotal, sale._id.toString());
-        // Update stkRequestID (new session, no transaction needed)
         await Sale.findByIdAndUpdate(sale._id, { stkRequestID: stkResponse.CheckoutRequestID });
         console.log(`STK Push Success: ${stkResponse.CheckoutRequestID}`);
       } catch (stkErr) {
@@ -168,10 +169,7 @@ const createSale = async (req, res) => {
           error: stkErr.message,
           response: stkErr.response?.data,
           status: stkErr.response?.status,
-          phone: phoneNumber,
-          amount: finalTotal,
         });
-        // Keep pending – return error for retry
         stkResponse = { error: 'STK push failed. Sale pending – retry or complete manually.' };
       }
     }
@@ -184,6 +182,7 @@ const createSale = async (req, res) => {
     session.endSession();
   }
 };
+
 
 
 // ──────────────────────────────────────────────────────────────
