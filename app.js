@@ -43,11 +43,16 @@ app.use(morgan('combined'));
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  limit: 100,
+  limit: 1000,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many requests, please try again later.',
+  },
 });
 app.use(limiter);
+
 
 // Body parser
 app.use(express.json());

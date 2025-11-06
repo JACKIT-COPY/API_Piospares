@@ -3,6 +3,7 @@ const Joi = require('joi');
 const Sale = require('../models/Sale');
 const Product = require('../models/Product');
 const { initiateSTKPush } = require('./mpesaController');
+const { updateSaleStatusInternal } = require('./saleService');  // ← NEW
 
 // ──────────────────────────────────────────────────────────────
 // Joi Schemas
@@ -13,12 +14,13 @@ const createSchema = Joi.object({
       Joi.object({
         productId: Joi.string().required(),
         name: Joi.string().required(),
-        price: Joi.number().positive().required(),
+        price: Joi.number().positive().required(),  // Allow client-adjusted price
         quantity: Joi.number().integer().min(1).required(),
       })
     )
     .min(1)
     .required(),
+  total: Joi.number().positive().optional(),  // Optional manual total
   discount: Joi.number().min(0).optional(),
   paymentMethod: Joi.string().valid('cash', 'mpesa', 'paybill', 'pending').required(),
   branchId: Joi.string().required(),
@@ -36,54 +38,6 @@ const updateStatusSchema = Joi.object({
     .when('status', { is: 'completed', then: Joi.required() }),
 });
 
-// ──────────────────────────────────────────────────────────────
-// INTERNAL: reusable stock + status change (used by callback)
-// ──────────────────────────────────────────────────────────────
-const updateSaleStatusInternal = async (saleId, newStatus, paymentMethod = null, receipt = null) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-  try {
-    const sale = await Sale.findById(saleId).session(session);
-    if (!sale) throw new Error('Sale not found');
-
-    // ---- STOCK DEDUCTION (pending → completed) ----
-    if (newStatus === 'completed' && sale.status === 'pending') {
-      for (const item of sale.products) {
-        const prod = await Product.findOneAndUpdate(
-          { _id: item.productId, stock: { $gte: item.quantity } },
-          { $inc: { stock: -item.quantity } },
-          { new: true, session }
-        );
-        if (!prod) throw new Error(`Insufficient stock for ${item.name}`);
-      }
-    }
-
-    // ---- RESTOCK (any → returned) ----
-    if (newStatus === 'returned' && sale.status !== 'returned') {
-      for (const item of sale.products) {
-        await Product.findByIdAndUpdate(
-          item.productId,
-          { $inc: { stock: item.quantity } },
-          { session }
-        );
-      }
-    }
-
-    // ---- UPDATE SALE ----
-    sale.status = newStatus;
-    if (paymentMethod) sale.paymentMethod = paymentMethod;
-    if (receipt) sale.receiptNumber = receipt;
-
-    await sale.save({ session });
-    await session.commitTransaction();
-    return sale;
-  } catch (err) {
-    await session.abortTransaction();
-    throw err;
-  } finally {
-    session.endSession();
-  }
-};
 
 // ──────────────────────────────────────────────────────────────
 // PUBLIC: createSale
@@ -96,11 +50,11 @@ const createSale = async (req, res) => {
   session.startTransaction();
 
   try {
-    const { products, discount = 0, paymentMethod, branchId, phoneNumber } = req.body;
+    const { products, total: clientTotal, discount = 0, paymentMethod, branchId, phoneNumber } = req.body;
     const user = req.user;
 
-    // ---- 1. Enrich & validate products (price from DB) ----
-    let total = 0;
+    // ---- 1. Enrich & validate products (use client prices, check stock/branch) ----
+    let computedTotal = 0;
     const enriched = [];
 
     for (const it of products) {
@@ -111,24 +65,26 @@ const createSale = async (req, res) => {
       }).session(session);
 
       if (!prod) throw new Error(`Product ${it.name} not found`);
-      if (prod.price !== it.price) {
-        return res.status(400).json({ message: `Price mismatch for ${it.name}` });
-      }
       if (prod.stock < it.quantity) throw new Error(`Insufficient stock for ${it.name}`);
 
-      total += prod.price * it.quantity;
+      // Use client price (adjusted) – no tampering check
+      const itemPrice = it.price;
+      computedTotal += itemPrice * it.quantity;
+
       enriched.push({
         productId: prod._id,
-        name: prod.name,
-        price: prod.price,
+        name: prod.name,  // Use DB name for consistency
+        price: itemPrice,
         quantity: it.quantity,
       });
     }
 
-    if (discount > total) throw new Error('Discount cannot exceed total');
-    const finalTotal = total - discount;
+    if (discount > computedTotal) throw new Error('Discount cannot exceed total');
 
-    // ---- 2. Create sale ----
+    // ---- 2. Use manual total if provided, else computed ----
+    const finalTotal = clientTotal !== undefined ? clientTotal : (computedTotal - discount);
+
+    // ---- 3. Create sale ----
     const isPendingPayment = paymentMethod === 'pending' || paymentMethod === 'mpesa';
     const sale = new Sale({
       orgId: user.orgId,
@@ -138,14 +94,14 @@ const createSale = async (req, res) => {
       total: finalTotal,
       discount,
       paymentMethod,
-      status: isPendingPayment ? 'pending' : 'completed',  // ← 'paybill' treated as immediate (completed)
+      status: isPendingPayment ? 'pending' : 'completed',
       phoneNumber: paymentMethod === 'mpesa' ? phoneNumber : null,
     });
 
     await sale.save({ session });
 
-    // ---- 3. Deduct stock for cash/paybill ----
-    if (paymentMethod === 'cash' || paymentMethod === 'paybill') {
+    // ---- 4. Deduct stock ONLY for cash ----
+    if (paymentMethod === 'cash') {
       for (const it of enriched) {
         await Product.findByIdAndUpdate(
           it.productId,
@@ -157,7 +113,7 @@ const createSale = async (req, res) => {
 
     await session.commitTransaction();
 
-    // ---- 4. M-PESA STK PUSH (only for mpesa) ----
+    // ---- 5. M-PESA STK PUSH ----
     let stkResponse = null;
     if (paymentMethod === 'mpesa') {
       try {
@@ -168,7 +124,7 @@ const createSale = async (req, res) => {
         console.error('STK Push Failed:', {
           error: stkErr.message,
           response: stkErr.response?.data,
-          status: stkErr.response?.status,
+          status: stkErr.response?.status
         });
         stkResponse = { error: 'STK push failed. Sale pending – retry or complete manually.' };
       }
@@ -182,8 +138,6 @@ const createSale = async (req, res) => {
     session.endSession();
   }
 };
-
-
 
 // ──────────────────────────────────────────────────────────────
 // PUBLIC: listSales (with pagination)
@@ -211,6 +165,7 @@ const listSales = async (req, res) => {
 // ──────────────────────────────────────────────────────────────
 // PUBLIC: updateSaleStatus (manual)
 // ──────────────────────────────────────────────────────────────
+// PUBLIC: updateSaleStatus
 const updateSaleStatus = async (req, res) => {
   const { error } = updateStatusSchema.validate(req.body);
   if (error) return res.status(400).json({ message: error.details[0].message });
