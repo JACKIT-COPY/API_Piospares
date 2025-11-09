@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 
 const reportSchema = new mongoose.Schema({
   orgId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', required: true },
+  // branchId: { type: mongoose.Schema.Types.ObjectId, ref: 'Branch', required: true },
   periodType: { type: String, enum: ['daily', 'weekly', 'monthly', 'quarterly', 'half-yearly', 'yearly'], required: true },
   startDate: { type: Date, required: true },
   endDate: { type: Date, required: true },

@@ -27,7 +27,11 @@ const getCachedOrCompute = async (orgId, periodType, start, end, module, compute
 // ──────────────────────────────────────────────────────────────
 const inventoryReport = async (orgId, start, end) => {
   const match = { orgId: new mongoose.Types.ObjectId(orgId), isDeleted: false };
-  const products = await Product.find(match).lean();
+
+  // POPULATE categoryId to get the name
+  const products = await Product.find(match)
+    .populate('categoryId', 'name')  // This is the key line
+    .lean();
 
   const totalValue = products.reduce((sum, p) => sum + (p.stock * p.price), 0);
   const totalCost = products.reduce((sum, p) => sum + (p.stock * (p.averageCost || p.buyingPrice || 0)), 0);
@@ -42,15 +46,23 @@ const inventoryReport = async (orgId, start, end) => {
   const topByQty = [];
 
   products.forEach(p => {
-    const cat = p.categoryId?.toString() || 'Uncategorized';
+    // Use actual category name if populated
+    const catId = p.categoryId?._id?.toString() || 'uncategorized';
+    const catName = p.categoryId?.name || 'Uncategorized';
+
     const branch = p.branchId?.toString();
 
     // Category
-    if (!byCategory[cat]) byCategory[cat] = { value: 0, cost: 0, qty: 0, profit: 0, products: 0 };
-    byCategory[cat].value += p.stock * p.price;
-    byCategory[cat].cost += p.stock * (p.averageCost || p.buyingPrice || 0);
-    byCategory[cat].qty += p.stock;
-    byCategory[cat].products += 1;
+    if (!byCategory[catId]) {
+      byCategory[catId] = { 
+        value: 0, cost: 0, qty: 0, profit: 0, products: 0,
+        categoryName: catName  // Store the real name
+      };
+    }
+    byCategory[catId].value += p.stock * p.price;
+    byCategory[catId].cost += p.stock * (p.averageCost || p.buyingPrice || 0);
+    byCategory[catId].qty += p.stock;
+    byCategory[catId].products += 1;
 
     // Branch
     if (!byBranch[branch]) byBranch[branch] = { value: 0, qty: 0 };
@@ -62,9 +74,11 @@ const inventoryReport = async (orgId, start, end) => {
     topByQty.push({ _id: p._id, name: p.name, qty: p.stock });
   });
 
-  Object.keys(byCategory).forEach(cat => {
-    byCategory[cat].profit = byCategory[cat].value - byCategory[cat].cost;
-    byCategory[cat].margin = byCategory[cat].value ? (byCategory[cat].profit / byCategory[cat].value) * 100 : 0;
+  // Calculate profit & margin
+  Object.keys(byCategory).forEach(catId => {
+    const cat = byCategory[catId];
+    cat.profit = cat.value - cat.cost;
+    cat.margin = cat.value ? (cat.profit / cat.value) * 100 : 0;
   });
 
   return {
@@ -75,16 +89,31 @@ const inventoryReport = async (orgId, start, end) => {
     outOfStockCount: outOfStock.length,
     lowStock: lowStock.map(p => ({ _id: p._id, name: p.name, stock: p.stock, minStock: p.minStock })),
     outOfStock: outOfStock.map(p => ({ _id: p._id, name: p.name })),
-    byCategory: Object.entries(byCategory).map(([id, data]) => ({ categoryId: id, ...data })),
+    
+    // Include categoryName in byCategory
+    byCategory: Object.entries(byCategory).map(([id, data]) => ({ 
+      categoryId: id, 
+      categoryName: data.categoryName,  // This is what frontend uses
+      ...data 
+    })),
+
     byBranch: Object.entries(byBranch).map(([id, data]) => ({ branchId: id, ...data })),
+
     topProductsByValue: topByValue.sort((a, b) => b.value - a.value).slice(0, 10),
     topProductsByQuantity: topByQty.sort((a, b) => b.qty - a.qty).slice(0, 10),
+
+    // Also fix topCategoriesByValue to include name
     topCategoriesByValue: Object.entries(byCategory)
-      .map(([id, data]) => ({ categoryId: id, value: data.value }))
+      .map(([id, data]) => ({ 
+        categoryId: id, 
+        categoryName: data.categoryName, 
+        value: data.value 
+      }))
       .sort((a, b) => b.value - a.value)
       .slice(0, 5)
   };
 };
+
 
 // ──────────────────────────────────────────────────────────────
 // SALES REPORT
@@ -126,6 +155,18 @@ const salesReport = async (orgId, start, end) => {
     });
   });
 
+  // Inside salesReport()
+const dailySales = {}
+sales.forEach(s => {
+  if (s.status !== 'completed') return
+  const dateKey = s.createdAt.toISOString().split('T')[0]
+  if (!dailySales[dateKey]) {
+    dailySales[dateKey] = { revenue: 0, transactions: 0 }
+  }
+  dailySales[dateKey].revenue += s.total
+  dailySales[dateKey].transactions += 1
+})
+
   return {
     totalRevenue,
     grossRevenue,
@@ -143,6 +184,11 @@ const salesReport = async (orgId, start, end) => {
       .sort((a, b) => b.count - a.count)
       .slice(0, 5)
   };
+  dailyBreakdown: Object.entries(dailySales).map(([date, data]) => ({
+  date,
+  revenue: data.revenue,
+  transactions: data.transactions,
+}))
 };
 
 // ──────────────────────────────────────────────────────────────
