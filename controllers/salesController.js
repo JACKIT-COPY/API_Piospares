@@ -144,7 +144,7 @@ const createSale = async (req, res) => {
 // ──────────────────────────────────────────────────────────────
 const listSales = async (req, res) => {
   try {
-    const { branchId, status, page = 1, limit = 20 } = req.query;
+    const { branchId, status, page = 1, limit = 50 } = req.query;
     const query = { 
       orgId: req.user.orgId,
       isDeleted: false  // ← ADD THIS TO EXCLUDE DELETED SALES
