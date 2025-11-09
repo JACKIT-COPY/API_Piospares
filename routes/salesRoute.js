@@ -1,5 +1,5 @@
 const express = require('express');
-const { createSale, listSales, updateSaleStatus } = require('../controllers/salesController');
+const { createSale, listSales, updateSaleStatus, softDeleteSale, listRecentlyDeleted } = require('../controllers/salesController');
 const authMiddleware = require('../middlewares/authMiddleware');
 const roleMiddleware = require('../middlewares/roleMiddleware');
 
@@ -129,5 +129,57 @@ router.get('/', authMiddleware, roleMiddleware(['Owner', 'Manager', 'Cashier', '
  *         description: Server error
  */
 router.put('/:id', authMiddleware, roleMiddleware(['Owner', 'Manager', 'SuperManager']), updateSaleStatus);
+
+/**
+ * @swagger
+ * /sales/{id}:
+ *   delete:
+ *     summary: Soft-delete a sale (Owner/SuperManager only)
+ *     tags: [Sales]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Sale soft-deleted
+ *       400:
+ *         description: Bad request
+ *       404:
+ *         description: Sale not found
+ */
+
+// SOFT-DELETE (Owner / SuperManager only)
+router.delete(
+  '/:id',
+  authMiddleware,
+  roleMiddleware(['Owner','SuperManager']),
+  softDeleteSale
+);
+
+/**
+ * @swagger
+ * /sales/recently-deleted:
+ *   get:
+ *     summary: List recently soft-deleted sales (last 30 days)
+ *     tags: [Sales]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Array of deleted sales
+ */
+
+// RECENTLY DELETED (Owner / SuperManager only)
+router.get(
+  '/recently-deleted',
+  authMiddleware,
+  roleMiddleware(['Owner','SuperManager']),
+  listRecentlyDeleted
+);
 
 module.exports = router;

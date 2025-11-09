@@ -145,7 +145,10 @@ const createSale = async (req, res) => {
 const listSales = async (req, res) => {
   try {
     const { branchId, status, page = 1, limit = 20 } = req.query;
-    const query = { orgId: req.user.orgId };
+    const query = { 
+      orgId: req.user.orgId,
+      isDeleted: false  // ← ADD THIS TO EXCLUDE DELETED SALES
+    };
     if (branchId) query.branchId = branchId;
     if (status) query.status = status;
 
@@ -165,12 +168,20 @@ const listSales = async (req, res) => {
 // ──────────────────────────────────────────────────────────────
 // PUBLIC: updateSaleStatus (manual)
 // ──────────────────────────────────────────────────────────────
-// PUBLIC: updateSaleStatus
 const updateSaleStatus = async (req, res) => {
   const { error } = updateStatusSchema.validate(req.body);
   if (error) return res.status(400).json({ message: error.details[0].message });
 
   try {
+    // ← ADD CHECK FOR isDeleted BEFORE CALLING INTERNAL
+    const saleCheck = await Sale.findOne({
+      _id: req.params.id,
+      orgId: req.user.orgId,
+      isDeleted: false  // ← ADD THIS
+    });
+
+    if (!saleCheck) throw new Error('Sale not found or deleted');
+
     const sale = await updateSaleStatusInternal(
       req.params.id,
       req.body.status,
@@ -182,9 +193,86 @@ const updateSaleStatus = async (req, res) => {
   }
 };
 
+// ------------------------------------------------------------------
+// SOFT DELETE (Owner / SuperManager only)
+// ------------------------------------------------------------------
+const softDeleteSale = async (req, res) => {
+  const { id } = req.params;
+  const user = req.user;
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const sale = await Sale.findOne({
+      _id: id,
+      orgId: user.orgId,
+      isDeleted: false,
+    }).session(session);
+
+    if (!sale) throw new Error('Sale not found or already deleted');
+
+    // ---- RESTORE STOCK if sale was COMPLETED ----
+    if (sale.status === 'completed') {
+      for (const it of sale.products) {
+        await Product.findByIdAndUpdate(
+          it.productId,
+          { $inc: { stock: it.quantity } },
+          { session }
+        );
+      }
+    }
+
+    // ---- MARK AS DELETED ----
+    await Sale.findByIdAndUpdate(
+      id,
+      {
+        isDeleted: true,
+        deletedAt: new Date(),
+        deletedBy: user._id,
+      },
+      { session }
+    );
+
+    await session.commitTransaction();
+    res.json({ message: 'Sale soft-deleted successfully' });
+  } catch (err) {
+    await session.abortTransaction();
+    res.status(400).json({ message: err.message });
+  } finally {
+    session.endSession();
+  }
+};
+
+// ------------------------------------------------------------------
+// LIST RECENTLY DELETED (last 30 days, newest first)
+// ------------------------------------------------------------------
+const listRecentlyDeleted = async (req, res) => {
+  try {
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    const deleted = await Sale.find({
+      orgId: req.user.orgId,
+      isDeleted: true,
+      deletedAt: { $gte: thirtyDaysAgo },
+    })
+      .select('total status paymentMethod createdAt deletedAt deletedBy')
+      .populate('deletedBy', 'name')
+      .sort({ deletedAt: -1 })
+      .exec(); // optional, but good practice 
+
+    res.json({ deleted });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
 module.exports = {
   createSale,
   listSales,
   updateSaleStatus,
   updateSaleStatusInternal, // ← used by callback
+  softDeleteSale,
+  listRecentlyDeleted,
 };
