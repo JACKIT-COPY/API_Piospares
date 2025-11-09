@@ -1,5 +1,6 @@
+// routes/reportRoutes.js
 const express = require('express');
-const { getSalesSummary, getInventorySummary, getExpensesSummary, getProcurementSummary, exportReport } = require('../controllers/reportController');
+const { getReport } = require('../controllers/reportController');
 const authMiddleware = require('../middlewares/authMiddleware');
 const roleMiddleware = require('../middlewares/roleMiddleware');
 
@@ -7,95 +8,57 @@ const router = express.Router();
 
 /**
  * @swagger
- * /reports/sales-summary:
+ * /reports:
  *   get:
- *     summary: Get sales summary for reports
+ *     summary: Get comprehensive POS report
  *     tags: [Reports]
  *     security:
  *       - bearerAuth: []
  *     parameters:
- *       - in: query
- *         name: branchId
- *         schema:
- *           type: string
- *       - in: query
- *         name: time
- *         schema:
- *           type: string
- *           enum: [today, week, month, year]
- *       - in: query
- *         name: startDate
- *         schema:
- *           type: string
- *           format: date
- *       - in: query
- *         name: endDate
- *         schema:
- *           type: string
- *           format: date
- *     responses:
- *       200:
- *         description: Sales summary
- *       400:
- *         description: Bad request
- *       401:
- *         description: Unauthorized
- *       500:
- *         description: Server error
- */
-router.get('/sales-summary', authMiddleware, roleMiddleware(['Owner', 'Manager', 'Cashier', 'SuperManager']), getSalesSummary);
-router.get('/inventory-summary', authMiddleware, roleMiddleware(['Owner', 'Manager', 'Cashier', 'SuperManager']), getInventorySummary);
-router.get('/expenses-summary', authMiddleware, roleMiddleware(['Owner', 'Manager', 'SuperManager']), getExpensesSummary);
-router.get('/procurement-summary', authMiddleware, roleMiddleware(['Owner', 'Manager', 'SuperManager']), getProcurementSummary);
-
-/**
- * @swagger
- * /reports/export/{type}:
- *   get:
- *     summary: Export report data as CSV
- *     tags: [Reports]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: type
- *         schema:
- *           type: string
- *           enum: [sales, inventory, expenses, procurement]
+ *       - name: period
+ *         in: query
  *         required: true
- *       - in: query
- *         name: branchId
  *         schema:
  *           type: string
- *       - in: query
- *         name: time
- *         schema:
- *           type: string
- *           enum: [today, week, month, year]
- *       - in: query
- *         name: startDate
+ *           enum: [daily, weekly, monthly, quarterly, half-yearly, yearly]
+ *         description: Time period for the report
+ *       - name: date
+ *         in: query
  *         schema:
  *           type: string
  *           format: date
- *       - in: query
- *         name: endDate
+ *         description: 'Anchor date (YYYY-MM-DD). Default: today'
+ *       - name: module
+ *         in: query
  *         schema:
  *           type: string
- *           format: date
+ *           enum: [inventory, sales, procurement, expenses, all]
+ *           default: all
+ *         description: Module to include
  *     responses:
- *       200:
- *         description: CSV file
+ *       '200':
+ *         description: Report generated successfully
  *         content:
- *           text/csv:
+ *           application/json:
  *             schema:
- *               type: string
- *       400:
- *         description: Bad request
- *       401:
- *         description: Unauthorized
- *       500:
+ *               type: object
+ *               properties:
+ *                 period:
+ *                   type: object
+ *                   properties:
+ *                     type: { type: string }
+ *                     start: { type: string, format: date-time }
+ *                     end: { type: string, format: date-time }
+ *       '400':
+ *         description: Invalid parameters
+ *       '500':
  *         description: Server error
  */
-router.get('/export/:type', authMiddleware, roleMiddleware(['Owner', 'Manager', 'SuperManager']), exportReport);
+router.get(
+  '/',
+  authMiddleware,
+  roleMiddleware(['Owner', 'Manager', 'SuperManager']),
+  getReport
+);
 
 module.exports = router;

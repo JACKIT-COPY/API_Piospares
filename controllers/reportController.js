@@ -1,430 +1,289 @@
-const Joi = require('joi');
-const Sale = require('../models/Sale');
+// controllers/reportController.js
+const mongoose = require('mongoose');
 const Product = require('../models/Product');
-const Expense = require('../models/Expense');
+const Sale = require('../models/Sale');
 const PurchaseOrder = require('../models/PurchaseOrder');
-const { Parser } = require('json2csv');
+const Expense = require('../models/Expense');
+const Report = require('../models/Report');
+const getDateRange = require('../utils/dateRange');
 
-const timeFilterSchema = Joi.object({
-  branchId: Joi.string().optional(),
-  time: Joi.string().valid('today', 'week', 'month', 'year').required(),
-  startDate: Joi.date().optional(),
-  endDate: Joi.date().optional().when('startDate', {
-    is: Joi.exist(),
-    then: Joi.required(),
-  }),
-});
+// Helper: Cache or compute
+const getCachedOrCompute = async (orgId, periodType, start, end, module, computeFn) => {
+  const cacheKey = { orgId, periodType, startDate: start, module };
+  const cached = await Report.findOne(cacheKey);
+  if (cached && cached.expiresAt > new Date()) return cached.data;
 
-// Helper to compute date ranges
-const getDateRange = (time, startDate, endDate) => {
-  const now = new Date();
-  let range = {};
-  if (startDate && endDate) {
-    range = { $gte: new Date(startDate), $lte: new Date(endDate) };
-  } else {
-    switch (time) {
-      case 'today':
-        range = { $gte: new Date(now.setHours(0, 0, 0, 0)), $lte: new Date(now.setHours(23, 59, 59, 999)) };
-        break;
-      case 'week':
-        range = { $gte: new Date(now.setDate(now.getDate() - 7)), $lte: new Date() };
-        break;
-      case 'month':
-        range = { $gte: new Date(now.setMonth(now.getMonth() - 1)), $lte: new Date() };
-        break;
-      case 'year':
-        range = { $gte: new Date(now.setFullYear(now.getFullYear() - 1)), $lte: new Date() };
-        break;
+  const data = await computeFn();
+  await Report.findOneAndUpdate(
+    cacheKey,
+    { endDate: end, data, generatedAt: new Date(), expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) },
+    { upsert: true, new: true }
+  );
+  return data;
+};
+
+// ──────────────────────────────────────────────────────────────
+// INVENTORY REPORT
+// ──────────────────────────────────────────────────────────────
+const inventoryReport = async (orgId, start, end) => {
+  const match = { orgId: new mongoose.Types.ObjectId(orgId), isDeleted: false };
+  const products = await Product.find(match).lean();
+
+  const totalValue = products.reduce((sum, p) => sum + (p.stock * p.price), 0);
+  const totalCost = products.reduce((sum, p) => sum + (p.stock * (p.averageCost || p.buyingPrice || 0)), 0);
+  const totalProfit = totalValue - totalCost;
+
+  const lowStock = products.filter(p => p.stock <= p.minStock);
+  const outOfStock = products.filter(p => p.stock === 0);
+
+  const byCategory = {};
+  const byBranch = {};
+  const topByValue = [];
+  const topByQty = [];
+
+  products.forEach(p => {
+    const cat = p.categoryId?.toString() || 'Uncategorized';
+    const branch = p.branchId?.toString();
+
+    // Category
+    if (!byCategory[cat]) byCategory[cat] = { value: 0, cost: 0, qty: 0, profit: 0, products: 0 };
+    byCategory[cat].value += p.stock * p.price;
+    byCategory[cat].cost += p.stock * (p.averageCost || p.buyingPrice || 0);
+    byCategory[cat].qty += p.stock;
+    byCategory[cat].products += 1;
+
+    // Branch
+    if (!byBranch[branch]) byBranch[branch] = { value: 0, qty: 0 };
+    byBranch[branch].value += p.stock * p.price;
+    byBranch[branch].qty += p.stock;
+
+    // Top products
+    topByValue.push({ _id: p._id, name: p.name, value: p.stock * p.price });
+    topByQty.push({ _id: p._id, name: p.name, qty: p.stock });
+  });
+
+  Object.keys(byCategory).forEach(cat => {
+    byCategory[cat].profit = byCategory[cat].value - byCategory[cat].cost;
+    byCategory[cat].margin = byCategory[cat].value ? (byCategory[cat].profit / byCategory[cat].value) * 100 : 0;
+  });
+
+  return {
+    totalInventoryValue: totalValue,
+    totalCostValue: totalCost,
+    totalProfit,
+    lowStockCount: lowStock.length,
+    outOfStockCount: outOfStock.length,
+    lowStock: lowStock.map(p => ({ _id: p._id, name: p.name, stock: p.stock, minStock: p.minStock })),
+    outOfStock: outOfStock.map(p => ({ _id: p._id, name: p.name })),
+    byCategory: Object.entries(byCategory).map(([id, data]) => ({ categoryId: id, ...data })),
+    byBranch: Object.entries(byBranch).map(([id, data]) => ({ branchId: id, ...data })),
+    topProductsByValue: topByValue.sort((a, b) => b.value - a.value).slice(0, 10),
+    topProductsByQuantity: topByQty.sort((a, b) => b.qty - a.qty).slice(0, 10),
+    topCategoriesByValue: Object.entries(byCategory)
+      .map(([id, data]) => ({ categoryId: id, value: data.value }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 5)
+  };
+};
+
+// ──────────────────────────────────────────────────────────────
+// SALES REPORT
+// ──────────────────────────────────────────────────────────────
+const salesReport = async (orgId, start, end) => {
+  const sales = await Sale.find({
+    orgId: new mongoose.Types.ObjectId(orgId),
+    createdAt: { $gte: start, $lte: end }
+  }).lean();
+
+  const totalRevenue = sales.reduce((sum, s) => sum + s.total, 0);
+  const totalDiscount = sales.reduce((sum, s) => sum + (s.discount || 0), 0);
+  const grossRevenue = totalRevenue + totalDiscount;
+  const totalTransactions = sales.filter(s => s.status === 'completed').length;
+  const pendingSales = sales.filter(s => s.status === 'pending').length;
+
+  const itemsSold = sales.reduce((sum, s) => sum + s.products.reduce((acc, p) => acc + p.quantity, 0), 0);
+
+  const byProduct = {};
+  const byCategory = {};
+  const byPayment = {};
+  const byHour = Array(24).fill(0).map(() => ({ count: 0, revenue: 0 }));
+
+  sales.forEach(s => {
+    if (s.status !== 'completed') return;
+
+    // Payment
+    byPayment[s.paymentMethod] = (byPayment[s.paymentMethod] || 0) + s.total;
+
+    // Hour
+    const hour = new Date(s.createdAt).getHours();
+    byHour[hour].count++;
+    byHour[hour].revenue += s.total;
+
+    s.products.forEach(p => {
+      byProduct[p.productId] = (byProduct[p.productId] || { qty: 0, revenue: 0, name: p.name });
+      byProduct[p.productId].qty += p.quantity;
+      byProduct[p.productId].revenue += p.price * p.quantity;
+    });
+  });
+
+  return {
+    totalRevenue,
+    grossRevenue,
+    totalDiscount,
+    totalTransactions,
+    pendingSalesCount: pendingSales,
+    itemsSold,
+    avgTicket: totalTransactions ? totalRevenue / totalTransactions : 0,
+    salesByPaymentMethod: Object.entries(byPayment).map(([method, revenue]) => ({ method, revenue })),
+    topProducts: Object.values(byProduct)
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 10),
+    peakHours: byHour
+      .map((h, i) => ({ hour: i, count: h.count, revenue: h.revenue }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5)
+  };
+};
+
+// ──────────────────────────────────────────────────────────────
+// PROCUREMENT REPORT
+// ──────────────────────────────────────────────────────────────
+const procurementReport = async (orgId, start, end) => {
+  const pos = await PurchaseOrder.find({
+    orgId: new mongoose.Types.ObjectId(orgId),
+    createdAt: { $gte: start, $lte: end },
+    isDeleted: false
+  }).populate('supplierId', 'name').lean();
+
+  const totalPOs = pos.length;
+  const pendingPOs = pos.filter(p => ['pending', 'ordered'].includes(p.status)).length;
+  const receivedPOs = pos.filter(p => p.status === 'received').length;
+  const totalSpend = pos.filter(p => p.status === 'received').reduce((sum, p) => sum + (p.totalCost || 0), 0);
+
+  const itemsOrdered = pos.reduce((sum, p) => sum + p.items.reduce((acc, i) => acc + i.quantity, 0), 0);
+  const itemsReceived = pos.reduce((sum, p) => sum + p.items.reduce((acc, i) => acc + (i.receivedQuantity || 0), 0), 0);
+
+  const bySupplier = {};
+  const byBranch = {};
+  const byItem = {};
+
+  pos.forEach(p => {
+    if (p.status !== 'received') return;
+
+    const sup = p.supplierId?._id?.toString() || 'Unknown';
+    bySupplier[sup] = (bySupplier[sup] || 0) + (p.totalCost || 0);
+
+    const branch = p.branchId?.toString();
+    byBranch[branch] = (byBranch[branch] || 0) + (p.totalCost || 0);
+
+    p.items.forEach(i => {
+      byItem[i.productId] = (byItem[i.productId] || 0) + i.quantity;
+    });
+  });
+
+  return {
+    totalPOs,
+    pendingPOsCount: pendingPOs,
+    receivedPOsCount: receivedPOs,
+    totalSpend,
+    itemsOrdered,
+    itemsReceived,
+    fulfillmentRate: itemsOrdered ? (itemsReceived / itemsOrdered) * 100 : 0,
+    spendingByBranch: Object.entries(byBranch).map(([id, spend]) => ({ branchId: id, spend })),
+    topItemsOrdered: Object.entries(byItem)
+      .map(([id, qty]) => ({ productId: id, quantity: qty }))
+      .sort((a, b) => b.quantity - a.quantity)
+      .slice(0, 10),
+    topSuppliersBySpend: Object.entries(bySupplier)
+      .map(([id, spend]) => ({ supplierId: id, spend }))
+      .sort((a, b) => b.spend - a.spend)
+      .slice(0, 5),
+    overduePOs: pos.filter(p => p.expectedDeliveryDate && new Date(p.expectedDeliveryDate) < new Date() && p.status !== 'received').length
+  };
+};
+
+// ──────────────────────────────────────────────────────────────
+// EXPENSES REPORT
+// ──────────────────────────────────────────────────────────────
+const expensesReport = async (orgId, start, end) => {
+  const expenses = await Expense.find({
+    orgId: new mongoose.Types.ObjectId(orgId),
+    dateIncurred: { $gte: start, $lte: end },
+    isDeleted: false
+  }).lean();
+
+  const total = expenses.reduce((sum, e) => sum + e.amount, 0);
+  const pending = expenses.filter(e => e.status === 'Pending').reduce((sum, e) => sum + e.amount, 0);
+  const overdue = expenses.filter(e => e.status === 'Overdue').reduce((sum, e) => sum + e.amount, 0);
+
+  const byCategory = {};
+  const byBranch = {};
+  const byPayment = {};
+
+  expenses.forEach(e => {
+    byCategory[e.category] = (byCategory[e.category] || 0) + e.amount;
+    byBranch[e.branchId] = (byBranch[e.branchId] || 0) + e.amount;
+    if (e.paymentMethod) byPayment[e.paymentMethod] = (byPayment[e.paymentMethod] || 0) + e.amount;
+  });
+
+  return {
+    totalExpenses: total,
+    pendingAmount: pending,
+    overdueAmount: overdue,
+    paidAmount: total - pending - overdue,
+    byCategory: Object.entries(byCategory).map(([cat, amt]) => ({ category: cat, amount: amt })),
+    byBranch: Object.entries(byBranch).map(([id, amt]) => ({ branchId: id, amount: amt })),
+    byPaymentMethod: Object.entries(byPayment).map(([method, amt]) => ({ method, amount: amt })),
+    topCategories: Object.entries(byCategory)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([cat, amt]) => ({ category: cat, amount: amt }))
+  };
+};
+
+// ──────────────────────────────────────────────────────────────
+// MAIN: Get Report
+// ──────────────────────────────────────────────────────────────
+const getReport = async (req, res) => {
+  const { period = 'weekly', date, module = 'all' } = req.query;
+  const validPeriods = ['daily', 'weekly', 'monthly', 'quarterly', 'half-yearly', 'yearly'];
+  const validModules = ['inventory', 'sales', 'procurement', 'expenses', 'all'];
+
+  if (!validPeriods.includes(period)) return res.status(400).json({ message: 'Invalid period' });
+  if (!validModules.includes(module)) return res.status(400).json({ message: 'Invalid module' });
+
+  try {
+    const { start, end } = getDateRange(period, date);
+    const orgId = req.user.orgId;
+
+    const result = {};
+
+    if (module === 'all' || module === 'inventory') {
+      result.inventory = await getCachedOrCompute(orgId, period, start, end, 'inventory', () => inventoryReport(orgId, start, end));
     }
-  }
-  return range;
-};
-
-const getPrevDateRange = (range) => {
-  const duration = (range.$lte - range.$gte) / (1000 * 60 * 60 * 24);
-  return { $gte: new Date(range.$gte - duration * 24 * 60 * 60 * 1000), $lte: range.$gte };
-};
-
-// Helper to generate trend data
-const getTrendData = (time, startDate, endDate) => {
-  if (startDate && endDate) {
-    const duration = (new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24);
-    return duration <= 7 ? 'hour' : duration <= 30 ? 'day' : 'month';
-  }
-  switch (time) {
-    case 'today': return 'hour';
-    case 'week': return 'day';
-    case 'month': return 'day';
-    case 'year': return 'month';
-  }
-};
-
-// @desc    Get sales summary
-const getSalesSummary = async (req, res) => {
-  try {
-    const { error } = timeFilterSchema.validate(req.query);
-    if (error) return res.status(400).json({ message: error.details[0].message });
-
-    const { branchId, time, startDate, endDate } = req.query;
-    const match = { orgId: req.user.orgId, status: { $ne: 'returned' } };
-    if (branchId) match.branchId = branchId;
-    match.createdAt = getDateRange(time, startDate, endDate);
-
-    const groupBy = getTrendData(time, startDate, endDate);
-    const dateFormat = groupBy === 'hour' ? {
-      $dateToString: { format: '%Y-%m-%d %H:00', date: '$createdAt' }
-    } : groupBy === 'day' ? {
-      $dateToString: { format: '%Y-%m-%d', date: '$createdAt' }
-    } : {
-      $dateToString: { format: '%Y-%m', date: '$createdAt' }
-    };
-
-    const [salesStats, topProducts, categoryBreakdown, recentSales, salesByEmployee, salesTrend] = await Promise.all([
-      Sale.aggregate([
-        { $match: match },
-        { $group: { _id: null, total: { $sum: '$total' }, count: { $sum: 1 } } },
-      ]),
-      Sale.aggregate([
-        { $match: match },
-        { $unwind: '$products' },
-        { $group: { _id: '$products.productId', name: { $first: '$products.name' }, quantity: { $sum: '$products.quantity' }, revenue: { $sum: '$products.price' } } },
-        { $sort: { quantity: -1 } },
-        { $limit: 5 },
-      ]),
-      Sale.aggregate([
-        { $match: match },
-        { $unwind: '$products' },
-        { $lookup: { from: 'products', localField: 'products.productId', foreignField: '_id', as: 'product' } },
-        { $unwind: '$product' },
-        { $group: { _id: '$product.categoryId', name: { $first: '$product.categoryId' }, total: { $sum: '$products.price' } } },
-        { $lookup: { from: 'categories', localField: '_id', foreignField: '_id', as: 'category' } },
-        { $unwind: '$category' },
-        { $project: { name: '$category.name', total: 1 } },
-      ]),
-      Sale.find(match).sort({ createdAt: -1 }).limit(5).lean(),
-      Sale.aggregate([
-        { $match: match },
-        { $group: { _id: '$employeeId', total: { $sum: '$total' }, count: { $sum: 1 } } },
-        { $lookup: { from: 'users', localField: '_id', foreignField: '_id', as: 'employee' } },
-        { $unwind: '$employee' },
-        { $project: { name: '$employee.name', total: 1, count: 1 } },
-        { $sort: { total: -1 } },
-        { $limit: 5 },
-      ]),
-      Sale.aggregate([
-        { $match: match },
-        { $group: { _id: dateFormat, value: { $sum: '$total' } } },
-        { $sort: { _id: 1 } },
-        { $project: { name: '$_id', value: 1, _id: 0 } },
-      ]),
-    ]);
-
-    const prevMatch = { ...match, createdAt: getPrevDateRange(match.createdAt) };
-    const prevSales = await Sale.aggregate([
-      { $match: prevMatch },
-      { $group: { _id: null, total: { $sum: '$total' } } },
-    ]);
-
-    const totalSales = salesStats[0]?.total || 0;
-    const avgOrderValue = salesStats[0]?.count ? totalSales / salesStats[0].count : 0;
-    const change = prevSales[0]?.total ? ((totalSales - prevSales[0].total) / prevSales[0].total * 100).toFixed(1) + '%' : 'N/A';
-
-    res.json({
-      stats: [
-        { name: 'Total Sales', value: `KSh ${totalSales.toLocaleString()}`, change, changeType: change.includes('-') ? 'negative' : 'positive', icon: 'DollarSign', trend: change.includes('-') ? 'down' : 'up', description: `vs previous ${time}` },
-        { name: 'Avg Order Value', value: `KSh ${avgOrderValue.toFixed(2)}`, change: 'N/A', changeType: 'neutral', icon: 'ShoppingCart', trend: 'neutral', description: 'per order' },
-        { name: 'Returns', value: await Sale.countDocuments({ ...match, status: 'returned' }), change: 'N/A', changeType: 'negative', icon: 'AlertTriangle', trend: 'down', description: 'this period' },
-        { name: 'Top Employee Sales', value: salesByEmployee[0]?.name || 'N/A', change: 'N/A', changeType: 'neutral', icon: 'Users', trend: 'neutral', description: `KSh ${salesByEmployee[0]?.total.toLocaleString() || 0}` },
-      ],
-      chartData: {
-        salesTrend,
-        categoryBreakdown: categoryBreakdown.map(item => ({ name: item.name, total: item.total })),
-      },
-      listItems: {
-        topProducts: topProducts.map(item => ({ _id: item._id, name: item.name, quantity: item.quantity, revenue: item.revenue })),
-        recentSales,
-        salesByEmployee,
-      },
-    });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-};
-
-// @desc    Get inventory summary
-const getInventorySummary = async (req, res) => {
-  try {
-    const { error } = timeFilterSchema.validate(req.query);
-    if (error) return res.status(400).json({ message: error.details[0].message });
-
-    const { branchId, time, startDate, endDate } = req.query;
-    const match = { orgId: req.user.orgId, isDeleted: false };
-    if (branchId) match.branchId = branchId;
-
-    const [productsStats, lowStockItems, overStockItems, stockByCategory, turnover] = await Promise.all([
-      Product.aggregate([
-        { $match: match },
-        { $group: { _id: null, count: { $sum: 1 }, totalValue: { $sum: { $multiply: ['$price', '$stock'] } } } },
-      ]),
-      Product.find({
-        ...match,
-        $expr: { $lte: ['$stock', { $ifNull: ['$minStock', 0] }] },
-      }).limit(5).lean(),
-      Product.find({
-        ...match,
-        $expr: { $gte: ['$stock', { $multiply: [{ $ifNull: ['$minStock', 0] }, 2] }] },
-      }).limit(5).lean(),
-      Product.aggregate([
-        { $match: match },
-        { $group: { _id: '$categoryId', totalStock: { $sum: '$stock' }, totalValue: { $sum: { $multiply: ['$price', '$stock'] } } } },
-        { $lookup: { from: 'categories', localField: '_id', foreignField: '_id', as: 'category' } },
-        { $unwind: '$category' },
-        { $project: { name: '$category.name', totalStock: 1, totalValue: 1 } },
-      ]),
-      Sale.aggregate([
-        { $match: { ...match, createdAt: getDateRange(time, startDate, endDate) } },
-        { $unwind: '$products' },
-        { $group: { _id: '$products.productId', totalSold: { $sum: '$products.quantity' } } },
-        { $lookup: { from: 'products', localField: '_id', foreignField: '_id', as: 'product' } },
-        { $unwind: '$product' },
-        { $project: { name: '$product.name', totalSold: 1, stock: '$product.stock' } },
-        { $match: { stock: { $gt: 0 } } },
-        { $project: { name: 1, turnoverRate: { $divide: ['$totalSold', '$stock'] } } },
-        { $sort: { turnoverRate: -1 } },
-        { $limit: 5 },
-      ]),
-    ]);
-
-    res.json({
-      stats: [
-        { name: 'Total Products', value: productsStats[0]?.count || 0, change: 'N/A', changeType: 'neutral', icon: 'Package', trend: 'neutral', description: 'active items' },
-        { name: 'Low Stock Items', value: lowStockItems.length, change: 'N/A', changeType: 'negative', icon: 'AlertTriangle', trend: 'down', description: 'need restock' },
-        { name: 'Overstock Items', value: overStockItems.length, change: 'N/A', changeType: 'negative', icon: 'AlertTriangle', trend: 'down', description: 'excess stock' },
-        { name: 'Stock Value', value: `KSh ${productsStats[0]?.totalValue.toLocaleString() || 0}`, change: 'N/A', changeType: 'neutral', icon: 'DollarSign', trend: 'neutral', description: 'current value' },
-      ],
-      chartData: {
-        stockByCategory: stockByCategory.map(item => ({ name: item.name, total: item.totalValue })),
-        turnover: turnover.map(item => ({ name: item.name, value: item.turnoverRate })),
-      },
-      listItems: {
-        lowStockItems,
-        overStockItems,
-        topTurnover: turnover,
-      },
-    });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-};
-
-// @desc    Get expenses summary
-const getExpensesSummary = async (req, res) => {
-  try {
-    const { error } = timeFilterSchema.validate(req.query);
-    if (error) return res.status(400).json({ message: error.details[0].message });
-
-    const { branchId, time, startDate, endDate } = req.query;
-    const match = { orgId: req.user.orgId, isDeleted: false };
-    if (branchId) match.branchId = branchId;
-    match.dateIncurred = getDateRange(time, startDate, endDate);
-
-    const groupBy = getTrendData(time, startDate, endDate);
-    const dateFormat = groupBy === 'hour' ? {
-      $dateToString: { format: '%Y-%m-%d %H:00', date: '$dateIncurred' }
-    } : groupBy === 'day' ? {
-      $dateToString: { format: '%Y-%m-%d', date: '$dateIncurred' }
-    } : {
-      $dateToString: { format: '%Y-%m', date: '$dateIncurred' }
-    };
-
-    const [expenseStats, overdueExpenses, statusBreakdown, categoryBreakdown, topVendors, expenseTrend] = await Promise.all([
-      Expense.aggregate([
-        { $match: match },
-        { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } },
-      ]),
-      Expense.find({ ...match, status: 'Overdue' }).limit(5).lean(),
-      Expense.aggregate([
-        { $match: match },
-        { $group: { _id: '$status', total: { $sum: '$amount' }, count: { $sum: 1 } } },
-        { $sort: { _id: 1 } },
-      ]),
-      Expense.aggregate([
-        { $match: match },
-        { $group: { _id: '$category', total: { $sum: '$amount' } } },
-        { $sort: { total: -1 } },
-      ]),
-      Expense.aggregate([
-        { $match: match },
-        { $group: { _id: '$vendor', total: { $sum: '$amount' }, count: { $sum: 1 } } },
-        { $sort: { total: -1 } },
-        { $limit: 5 },
-      ]),
-      Expense.aggregate([
-        { $match: match },
-        { $group: { _id: dateFormat, value: { $sum: '$amount' } } },
-        { $sort: { _id: 1 } },
-        { $project: { name: '$_id', value: 1, _id: 0 } },
-      ]),
-    ]);
-
-    const prevMatch = { ...match, dateIncurred: getPrevDateRange(match.dateIncurred) };
-    const prevExpenses = await Expense.aggregate([
-      { $match: prevMatch },
-      { $group: { _id: null, total: { $sum: '$amount' } } },
-    ]);
-
-    const totalExpenses = expenseStats[0]?.total || 0;
-    const change = prevExpenses[0]?.total ? ((totalExpenses - prevExpenses[0].total) / prevExpenses[0].total * 100).toFixed(1) + '%' : 'N/A';
-
-    res.json({
-      stats: [
-        { name: 'Total Expenses', value: `KSh ${totalExpenses.toLocaleString()}`, change, changeType: change.includes('-') ? 'positive' : 'negative', icon: 'DollarSign', trend: change.includes('-') ? 'down' : 'up', description: `vs previous ${time}` },
-        { name: 'Overdue Expenses', value: overdueExpenses.length, change: 'N/A', changeType: 'negative', icon: 'AlertTriangle', trend: 'down', description: 'pending payment' },
-        { name: 'Top Category', value: categoryBreakdown[0]?._id || 'N/A', change: 'N/A', changeType: 'neutral', icon: 'BarChart3', trend: 'neutral', description: `KSh ${categoryBreakdown[0]?.total.toLocaleString() || 0}` },
-        { name: 'Top Vendor', value: topVendors[0]?._id || 'N/A', change: 'N/A', changeType: 'neutral', icon: 'Users', trend: 'neutral', description: `KSh ${topVendors[0]?.total.toLocaleString() || 0}` },
-      ],
-      chartData: {
-        expenseTrend,
-        categoryBreakdown: categoryBreakdown.map(item => ({ name: item._id, total: item.total })),
-        statusBreakdown: statusBreakdown.map(item => ({ name: item._id, total: item.total })),
-      },
-      listItems: {
-        overdueExpenses,
-        topVendors,
-      },
-    });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-};
-
-// @desc    Get procurement summary
-const getProcurementSummary = async (req, res) => {
-  try {
-    const { error } = timeFilterSchema.validate(req.query);
-    if (error) return res.status(400).json({ message: error.details[0].message });
-
-    const { branchId, time, startDate, endDate } = req.query;
-    const match = { orgId: req.user.orgId, isDeleted: false };
-    if (branchId) match.branchId = branchId;
-    match.createdAt = getDateRange(time, startDate, endDate);
-
-    const groupBy = getTrendData(time, startDate, endDate);
-    const dateFormat = groupBy === 'hour' ? {
-      $dateToString: { format: '%Y-%m-%d %H:00', date: '$createdAt' }
-    } : groupBy === 'day' ? {
-      $dateToString: { format: '%Y-%m-%d', date: '$createdAt' }
-    } : {
-      $dateToString: { format: '%Y-%m', date: '$createdAt' }
-    };
-
-    const [poStats, pendingPOs, statusBreakdown, supplierBreakdown, spendTrend] = await Promise.all([
-      PurchaseOrder.aggregate([
-        { $match: match },
-        { $group: { _id: null, total: { $sum: '$totalCost' }, count: { $sum: 1 } } },
-      ]),
-      PurchaseOrder.find({ ...match, status: 'pending' }).limit(5).lean(),
-      PurchaseOrder.aggregate([
-        { $match: match },
-        { $group: { _id: '$status', total: { $sum: '$totalCost' }, count: { $sum: 1 } } },
-        { $sort: { _id: 1 } },
-      ]),
-      PurchaseOrder.aggregate([
-        { $match: match },
-        { $group: { _id: '$supplierId', total: { $sum: '$totalCost' } } },
-        { $lookup: { from: 'suppliers', localField: '_id', foreignField: '_id', as: 'supplier' } },
-        { $unwind: '$supplier' },
-        { $project: { name: '$supplier.name', total: 1 } },
-        { $sort: { total: -1 } },
-        { $limit: 5 },
-      ]),
-      PurchaseOrder.aggregate([
-        { $match: match },
-        { $group: { _id: dateFormat, value: { $sum: '$totalCost' } } },
-        { $sort: { _id: 1 } },
-        { $project: { name: '$_id', value: 1, _id: 0 } },
-      ]),
-    ]);
-
-    const prevMatch = { ...match, createdAt: getPrevDateRange(match.createdAt) };
-    const prevPOs = await PurchaseOrder.aggregate([
-      { $match: prevMatch },
-      { $group: { _id: null, total: { $sum: '$totalCost' } } },
-    ]);
-
-    const totalSpend = poStats[0]?.total || 0;
-    const change = prevPOs[0]?.total ? ((totalSpend - prevPOs[0].total) / prevPOs[0].total * 100).toFixed(1) + '%' : 'N/A';
-
-    res.json({
-      stats: [
-        { name: 'Total POs', value: poStats[0]?.count || 0, change: 'N/A', changeType: 'neutral', icon: 'Truck', trend: 'neutral', description: 'created' },
-        { name: 'Pending POs', value: pendingPOs.length, change: 'N/A', changeType: 'negative', icon: 'AlertTriangle', trend: 'down', description: 'awaiting receipt' },
-        { name: 'Total Spend', value: `KSh ${totalSpend.toLocaleString()}`, change, changeType: change.includes('-') ? 'positive' : 'negative', icon: 'DollarSign', trend: change.includes('-') ? 'down' : 'up', description: `vs previous ${time}` },
-        { name: 'Top Supplier', value: supplierBreakdown[0]?.name || 'N/A', change: 'N/A', changeType: 'neutral', icon: 'Users', trend: 'neutral', description: `KSh ${supplierBreakdown[0]?.total.toLocaleString() || 0}` },
-      ],
-      chartData: {
-        spendTrend,
-        supplierBreakdown: supplierBreakdown.map(item => ({ name: item.name, total: item.total })),
-        statusBreakdown: statusBreakdown.map(item => ({ name: item._id, total: item.total })),
-      },
-      listItems: {
-        pendingPOs,
-        topSuppliers: supplierBreakdown,
-      },
-    });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-};
-
-// @desc    Export report data as CSV
-const exportReport = async (req, res) => {
-  try {
-    const { type } = req.params;
-    const { branchId, time, startDate, endDate } = req.query;
-    const match = { orgId: req.user.orgId, isDeleted: false };
-    if (branchId) match.branchId = branchId;
-
-    let data = [];
-    let fields = [];
-    let filename = '';
-
-    switch (type) {
-      case 'sales':
-        match.createdAt = getDateRange(time, startDate, endDate);
-        data = await Sale.find(match).lean();
-        fields = ['_id', 'total', 'status', 'createdAt', 'employeeId', 'branchId'];
-        filename = 'sales_report.csv';
-        break;
-      case 'inventory':
-        data = await Product.find(match).lean();
-        fields = ['_id', 'name', 'stock', 'minStock', 'price', 'categoryId', 'branchId'];
-        filename = 'inventory_report.csv';
-        break;
-      case 'expenses':
-        match.dateIncurred = getDateRange(time, startDate, endDate);
-        data = await Expense.find(match).lean();
-        fields = ['_id', 'amount', 'category', 'subCategory', 'status', 'vendor', 'dateIncurred', 'branchId'];
-        filename = 'expenses_report.csv';
-        break;
-      case 'procurement':
-        match.createdAt = getDateRange(time, startDate, endDate);
-        data = await PurchaseOrder.find(match).lean();
-        fields = ['_id', 'totalCost', 'status', 'supplierId', 'createdAt', 'branchId'];
-        filename = 'procurement_report.csv';
-        break;
-      default:
-        return res.status(400).json({ message: 'Invalid report type' });
+    if (module === 'all' || module === 'sales') {
+      result.sales = await getCachedOrCompute(orgId, period, start, end, 'sales', () => salesReport(orgId, start, end));
+    }
+    if (module === 'all' || module === 'procurement') {
+      result.procurement = await getCachedOrCompute(orgId, period, start, end, 'procurement', () => procurementReport(orgId, start, end));
+    }
+    if (module === 'all' || module === 'expenses') {
+      result.expenses = await getCachedOrCompute(orgId, period, start, end, 'expenses', () => expensesReport(orgId, start, end));
     }
 
-    const parser = new Parser({ fields });
-    const csv = parser.parse(data);
-    res.header('Content-Type', 'text/csv');
-    res.attachment(filename);
-    res.send(csv);
+    // Add profitability if all
+    if (module === 'all') {
+      const profit = (result.sales?.totalRevenue || 0) - (result.expenses?.totalExpenses || 0);
+      result.profitability = { netProfit: profit };
+    }
+
+    res.json({
+      period: { type: period, start, end },
+      ...result
+    });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
 
-module.exports = { getSalesSummary, getInventorySummary, getExpensesSummary, getProcurementSummary, exportReport };
+module.exports = { getReport };
