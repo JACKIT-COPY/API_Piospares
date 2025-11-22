@@ -16,7 +16,7 @@ const getCachedOrCompute = async (orgId, periodType, start, end, module, compute
   const data = await computeFn();
   await Report.findOneAndUpdate(
     cacheKey,
-    { endDate: end, data, generatedAt: new Date(), expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) },
+    { endDate: end, data, generatedAt: new Date(), expiresAt: new Date(Date.now() + 60 * 1000) },
     { upsert: true, new: true }
   );
   return data;
@@ -182,13 +182,14 @@ sales.forEach(s => {
     peakHours: byHour
       .map((h, i) => ({ hour: i, count: h.count, revenue: h.revenue }))
       .sort((a, b) => b.count - a.count)
-      .slice(0, 5)
+      .slice(0, 5),
+      dailyBreakdown: Object.entries(dailySales).map(([date, data]) => ({
+    date,
+    revenue: data.revenue,
+    transactions: data.transactions,
+  }))
   };
-  dailyBreakdown: Object.entries(dailySales).map(([date, data]) => ({
-  date,
-  revenue: data.revenue,
-  transactions: data.transactions,
-}))
+
 };
 
 // ──────────────────────────────────────────────────────────────
