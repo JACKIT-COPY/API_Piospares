@@ -4,7 +4,7 @@ const poSchema = new mongoose.Schema({
   orgId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', required: true },
   supplierId: { type: mongoose.Schema.Types.ObjectId, ref: 'Supplier', required: true },
   branchId: { type: mongoose.Schema.Types.ObjectId, ref: 'Branch', required: true },
-  status: { type: String, enum: ['pending', 'ordered', 'received', 'cancelled'], default: 'pending' },
+  status: { type: String, enum: ['pending', 'ordered', 'received', 'cancelled', 'completed'], default: 'pending' },
   items: [{
     productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
     quantity: { type: Number, required: true, min: 1 },
@@ -12,6 +12,8 @@ const poSchema = new mongoose.Schema({
     receivedQuantity: { type: Number, default: 0, min: 0 }
   }],
   totalCost: { type: Number, required: true, min: 0 },
+  paidAmount: { type: Number, default: 0, min: 0 },
+  pendingAmount: { type: Number, default: 0, min: 0 },
   notes: { type: String },
   isDeleted: { type: Boolean, default: false },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },

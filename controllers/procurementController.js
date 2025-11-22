@@ -51,7 +51,8 @@ const receiveGoodsSchema = Joi.object({
   items: Joi.array().items(Joi.object({
     productId: Joi.string().required(),
     receivedQuantity: Joi.number().integer().min(0).required()
-  })).required()
+  })).required(),
+  amountPaid: Joi.number().min(0).optional()
 });
 
 // @desc    Create a new supplier
