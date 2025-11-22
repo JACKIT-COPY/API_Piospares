@@ -239,15 +239,17 @@ const listPOs = async (req, res) => {
 // @route   POST /procurement/purchase-orders/:id/receive
 // @access  Owner/Manager/SuperManager
 const receiveGoods = async (req, res) => {
+  // Accept amountPaid in the request
   const { error } = receiveGoodsSchema.validate(req.body);
   if (error) return res.status(400).json({ message: error.details[0].message });
+  const amountPaid = typeof req.body.amountPaid === 'number' ? req.body.amountPaid : 0;
 
   const session = await mongoose.startSession();
   session.startTransaction();
   try {
     const po = await PurchaseOrder.findOne({ _id: req.params.id, orgId: req.user.orgId, isDeleted: false }).session(session);
     if (!po) return res.status(404).json({ message: 'Purchase Order not found' });
-    if (po.status === 'received' || po.status === 'cancelled') return res.status(400).json({ message: 'Invalid status for receiving' });
+    if (po.status === 'received' || po.status === 'cancelled' || po.status === 'completed') return res.status(400).json({ message: 'Invalid status for receiving' });
 
     let fullyReceived = true;
     for (const receivedItem of req.body.items) {
@@ -270,25 +272,44 @@ const receiveGoods = async (req, res) => {
       }
     }
 
-    po.status = fullyReceived ? 'received' : 'ordered';
+    // Handle payment tracking
+    po.paidAmount = (po.paidAmount || 0) + amountPaid;
+    po.pendingAmount = Math.max(0, po.totalCost - po.paidAmount);
+
+    // Set PO status
+    if (fullyReceived && po.pendingAmount === 0) {
+      po.status = 'completed';
+    } else if (fullyReceived) {
+      po.status = 'received';
+    } else {
+      po.status = 'ordered';
+    }
     po.updatedBy = req.user.userId;
     await po.save({ session });
 
-    // Auto-create expense if fully received
+    // Auto-create or update expense if fully received
     if (fullyReceived) {
-      const expense = new Expense({
-        orgId: req.user.orgId,
-        branchId: po.branchId,
-        category: 'Procurement',
-        subCategory: 'InventoryPurchase',
-        amount: po.totalCost,
-        description: `Expense for PO ${po._id} from supplier ${po.supplierId}`,
-        dateIncurred: new Date(),
-        status: 'Pending',
-        referenceId: po._id,
-        createdBy: req.user.userId,
-        updatedBy: req.user.userId
-      });
+      // Try to find existing expense for this PO
+      let expense = await Expense.findOne({ referenceId: po._id, orgId: req.user.orgId }).session(session);
+      if (!expense) {
+        expense = new Expense({
+          orgId: req.user.orgId,
+          branchId: po.branchId,
+          category: 'Procurement',
+          subCategory: 'InventoryPurchase',
+          amount: po.totalCost,
+          description: `Expense for PO ${po._id} from supplier ${po.supplierId}`,
+          dateIncurred: new Date(),
+          status: po.pendingAmount === 0 ? 'Paid' : 'Pending',
+          referenceId: po._id,
+          createdBy: req.user.userId,
+          updatedBy: req.user.userId
+        });
+      } else {
+        expense.status = po.pendingAmount === 0 ? 'Paid' : 'Pending';
+        expense.amount = po.totalCost;
+        expense.updatedBy = req.user.userId;
+      }
       await expense.save({ session });
     }
 
