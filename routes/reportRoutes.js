@@ -36,13 +36,19 @@ const router = express.Router();
  *           default: all
  *         description: Module to include
  *     responses:
- *       '200':
+ *       - name: module
  *         description: Report generated successfully
  *         content:
  *           application/json:
  *             schema:
  *               type: object
  *               properties:
+ *       - name: branchId
+ *         in: query
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Branch id to filter the report (optional). If omitted, report is org-wide.
  *                 period:
  *                   type: object
  *                   properties:

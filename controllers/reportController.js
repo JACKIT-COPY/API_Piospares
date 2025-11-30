@@ -5,11 +5,12 @@ const Sale = require('../models/Sale');
 const PurchaseOrder = require('../models/PurchaseOrder');
 const Expense = require('../models/Expense');
 const Report = require('../models/Report');
+const Branch = require('../models/Branch');
 const getDateRange = require('../utils/dateRange');
 
 // Helper: Cache or compute
-const getCachedOrCompute = async (orgId, periodType, start, end, module, computeFn) => {
-  const cacheKey = { orgId, periodType, startDate: start, module };
+const getCachedOrCompute = async (orgId, branchId, periodType, start, end, module, computeFn) => {
+  const cacheKey = { orgId, branchId: branchId || null, periodType, startDate: start, module };
   const cached = await Report.findOne(cacheKey);
   if (cached && cached.expiresAt > new Date()) return cached.data;
 
@@ -25,8 +26,9 @@ const getCachedOrCompute = async (orgId, periodType, start, end, module, compute
 // ──────────────────────────────────────────────────────────────
 // INVENTORY REPORT
 // ──────────────────────────────────────────────────────────────
-const inventoryReport = async (orgId, start, end) => {
+const inventoryReport = async (orgId, branchId, start, end) => {
   const match = { orgId: new mongoose.Types.ObjectId(orgId), isDeleted: false };
+  if (branchId) match.branchId = new mongoose.Types.ObjectId(branchId);
 
   // POPULATE categoryId to get the name
   const products = await Product.find(match)
@@ -118,11 +120,14 @@ const inventoryReport = async (orgId, start, end) => {
 // ──────────────────────────────────────────────────────────────
 // SALES REPORT
 // ──────────────────────────────────────────────────────────────
-const salesReport = async (orgId, start, end) => {
-  const sales = await Sale.find({
+const salesReport = async (orgId, branchId, start, end) => {
+  const saleQuery = {
     orgId: new mongoose.Types.ObjectId(orgId),
-    createdAt: { $gte: start, $lte: end }
-  }).lean();
+    createdAt: { $gte: start, $lte: end },
+    isDeleted: false
+  };
+  if (branchId) saleQuery.branchId = new mongoose.Types.ObjectId(branchId);
+  const sales = await Sale.find(saleQuery).lean();
 
   const totalRevenue = sales.reduce((sum, s) => sum + s.total, 0);
   const totalDiscount = sales.reduce((sum, s) => sum + (s.discount || 0), 0);
@@ -195,12 +200,14 @@ sales.forEach(s => {
 // ──────────────────────────────────────────────────────────────
 // PROCUREMENT REPORT
 // ──────────────────────────────────────────────────────────────
-const procurementReport = async (orgId, start, end) => {
-  const pos = await PurchaseOrder.find({
+const procurementReport = async (orgId, branchId, start, end) => {
+  const poQuery = {
     orgId: new mongoose.Types.ObjectId(orgId),
     createdAt: { $gte: start, $lte: end },
     isDeleted: false
-  }).populate('supplierId', 'name').lean();
+  };
+  if (branchId) poQuery.branchId = new mongoose.Types.ObjectId(branchId);
+  const pos = await PurchaseOrder.find(poQuery).populate('supplierId', 'name').lean();
 
   const totalPOs = pos.length;
   const pendingPOs = pos.filter(p => ['pending', 'ordered'].includes(p.status)).length;
@@ -252,12 +259,14 @@ const procurementReport = async (orgId, start, end) => {
 // ──────────────────────────────────────────────────────────────
 // EXPENSES REPORT
 // ──────────────────────────────────────────────────────────────
-const expensesReport = async (orgId, start, end) => {
-  const expenses = await Expense.find({
+const expensesReport = async (orgId, branchId, start, end) => {
+  const expenseQuery = {
     orgId: new mongoose.Types.ObjectId(orgId),
     dateIncurred: { $gte: start, $lte: end },
     isDeleted: false
-  }).lean();
+  };
+  if (branchId) expenseQuery.branchId = new mongoose.Types.ObjectId(branchId);
+  const expenses = await Expense.find(expenseQuery).lean();
 
   const total = expenses.reduce((sum, e) => sum + e.amount, 0);
   const pending = expenses.filter(e => e.status === 'Pending').reduce((sum, e) => sum + e.amount, 0);
@@ -292,7 +301,7 @@ const expensesReport = async (orgId, start, end) => {
 // MAIN: Get Report
 // ──────────────────────────────────────────────────────────────
 const getReport = async (req, res) => {
-  const { period = 'weekly', date, module = 'all' } = req.query;
+  const { period = 'weekly', date, module = 'all', branchId } = req.query;
   const validPeriods = ['daily', 'weekly', 'monthly', 'quarterly', 'half-yearly', 'yearly'];
   const validModules = ['inventory', 'sales', 'procurement', 'expenses', 'all'];
 
@@ -303,19 +312,30 @@ const getReport = async (req, res) => {
     const { start, end } = getDateRange(period, date);
     const orgId = req.user.orgId;
 
+    // Validate branchId belongs to current org (if provided)
+    let validatedBranchId = null;
+    if (branchId) {
+      if (!mongoose.isValidObjectId(branchId)) {
+        return res.status(400).json({ message: 'Invalid branchId' });
+      }
+      const branch = await Branch.findOne({ _id: branchId, orgId: new mongoose.Types.ObjectId(orgId) }).lean();
+      if (!branch) return res.status(400).json({ message: 'Branch not found or does not belong to your organization' });
+      validatedBranchId = branchId;
+    }
+
     const result = {};
 
     if (module === 'all' || module === 'inventory') {
-      result.inventory = await getCachedOrCompute(orgId, period, start, end, 'inventory', () => inventoryReport(orgId, start, end));
+      result.inventory = await getCachedOrCompute(orgId, validatedBranchId, period, start, end, 'inventory', () => inventoryReport(orgId, validatedBranchId, start, end));
     }
     if (module === 'all' || module === 'sales') {
-      result.sales = await getCachedOrCompute(orgId, period, start, end, 'sales', () => salesReport(orgId, start, end));
+      result.sales = await getCachedOrCompute(orgId, validatedBranchId, period, start, end, 'sales', () => salesReport(orgId, validatedBranchId, start, end));
     }
     if (module === 'all' || module === 'procurement') {
-      result.procurement = await getCachedOrCompute(orgId, period, start, end, 'procurement', () => procurementReport(orgId, start, end));
+      result.procurement = await getCachedOrCompute(orgId, validatedBranchId, period, start, end, 'procurement', () => procurementReport(orgId, validatedBranchId, start, end));
     }
     if (module === 'all' || module === 'expenses') {
-      result.expenses = await getCachedOrCompute(orgId, period, start, end, 'expenses', () => expensesReport(orgId, start, end));
+      result.expenses = await getCachedOrCompute(orgId, validatedBranchId, period, start, end, 'expenses', () => expensesReport(orgId, validatedBranchId, start, end));
     }
 
     // Add profitability if all

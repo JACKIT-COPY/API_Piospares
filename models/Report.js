@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 
 const reportSchema = new mongoose.Schema({
   orgId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', required: true },
+  branchId: { type: mongoose.Schema.Types.ObjectId, ref: 'Branch' },
   // branchId: { type: mongoose.Schema.Types.ObjectId, ref: 'Branch', required: true },
   periodType: { type: String, enum: ['daily', 'weekly', 'monthly', 'quarterly', 'half-yearly', 'yearly'], required: true },
   startDate: { type: Date, required: true },
@@ -13,6 +14,7 @@ const reportSchema = new mongoose.Schema({
   expiresAt: { type: Date, index: { expires: '7d' } } // Auto-delete after 7 days
 });
 
-reportSchema.index({ orgId: 1, periodType: 1, startDate: 1, module: 1 }, { unique: true });
+// Keep branchId as part of the unique index so caching differs per branch
+reportSchema.index({ orgId: 1, branchId: 1, periodType: 1, startDate: 1, module: 1 }, { unique: true, partialFilterExpression: { orgId: { $exists: true } } });
 
 module.exports = mongoose.model('Report', reportSchema);
