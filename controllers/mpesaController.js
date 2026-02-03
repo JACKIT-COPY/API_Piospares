@@ -149,7 +149,7 @@ const handleCallback = async (req, res) => {
       // re-fetch to check if all splits are completed
       const freshSale = await Sale.findById(sale._id);
       const allCompleted = freshSale.paymentSplits.every(s => s.completed || s.method === 'cash' || s.method === 'paybill');
-      const completedSum = freshSale.paymentSplits.reduce((s, p) => s + (p.completed ? Number(p.amount) : 0), 0);
+      const completedSum = freshSale.paymentSplits.reduce((s, p) => s + ((p.completed || p.method === 'cash' || p.method === 'paybill') ? Number(p.amount) : 0), 0);
 
       if (allCompleted && Math.abs(completedSum - Number(freshSale.total)) < 0.0001) {
         // mark sale completed

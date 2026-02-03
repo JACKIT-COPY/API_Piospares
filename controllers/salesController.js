@@ -125,7 +125,13 @@ const createSale = async (req, res) => {
       total: finalTotal,
       discount,
       paymentMethod,
-      paymentSplits: paymentMethod === 'split' ? paymentSplits.map(p => ({ ...p, completed: false })) : [],
+      paymentSplits: paymentMethod === 'split'
+        ? paymentSplits.map(p => ({
+            ...p,
+            // cash and paybill are completed by default; mpesa and pending remain not completed
+            completed: typeof p.completed === 'boolean' ? p.completed : (p.method === 'cash' || p.method === 'paybill')
+          }))
+        : [],
       status: isPending ? 'pending' : 'completed',
       phoneNumber: paymentMethod === 'mpesa' ? phoneNumber : null,
     };
