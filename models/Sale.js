@@ -15,7 +15,15 @@ const saleSchema = new mongoose.Schema({
 
   total: { type: Number, required: true },
   discount: { type: Number, default: 0 },
-  paymentMethod: { type: String, enum: ['cash', 'mpesa', 'pending', 'paybill'], required: true },
+  paymentMethod: { type: String, enum: ['cash', 'mpesa', 'pending', 'paybill', 'split'], required: true },
+  paymentSplits: [{
+    method: { type: String, enum: ['cash', 'mpesa', 'paybill', 'pending'], required: true },
+    amount: { type: Number, required: true },
+    phoneNumber: { type: String },
+    stkRequestID: { type: String, default: null },
+    receiptNumber: { type: String, default: null },
+    completed: { type: Boolean, default: false },
+  }],
   status: { type: String, enum: ['completed', 'pending', 'returned'], default: 'completed' },
 
   // ---- NEW SOFT-DELETE FIELDS ----

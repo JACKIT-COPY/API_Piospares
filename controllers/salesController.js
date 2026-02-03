@@ -25,6 +25,21 @@ const createSchema = Joi.object({
   paymentMethod: Joi.string().valid('cash', 'mpesa', 'paybill', 'pending').required(),
   branchId: Joi.string().required(),
   saleDate: Joi.date().iso().max('now').optional(),
+  paymentSplits: Joi.when('paymentMethod', {
+    is: 'split',
+    then: Joi.array().items(
+      Joi.object({
+        method: Joi.string().valid('cash','mpesa','paybill','pending').required(),
+        amount: Joi.number().positive().required(),
+        phoneNumber: Joi.when('method', {
+          is: 'mpesa',
+          then: Joi.string().pattern(/^254[17]\d{8}$/).required(),
+          otherwise: Joi.forbidden(),
+        }),
+      })
+    ).min(1).required(),
+    otherwise: Joi.forbidden(),
+  }),
   phoneNumber: Joi.when('paymentMethod', {
     is: 'mpesa',
     then: Joi.string().pattern(/^254[17]\d{8}$/).required(),
@@ -35,7 +50,7 @@ const createSchema = Joi.object({
 const updateStatusSchema = Joi.object({
   status: Joi.string().valid('completed', 'pending', 'returned').required(),
   paymentMethod: Joi.string()
-    .valid('cash', 'mpesa')
+    .valid('cash', 'mpesa', 'paybill', 'split')
     .when('status', { is: 'completed', then: Joi.required() }),
 });
 
@@ -51,7 +66,7 @@ const createSale = async (req, res) => {
   session.startTransaction();
 
   try {
-    const { products, total: clientTotal, discount = 0, paymentMethod, branchId, phoneNumber, saleDate } = req.body;
+    const { products, total: clientTotal, discount = 0, paymentMethod, branchId, phoneNumber, saleDate, paymentSplits } = req.body;
     const user = req.user;
 
     // ---- 1. Enrich & validate products (use client prices, check stock/branch) ----
@@ -85,9 +100,22 @@ const createSale = async (req, res) => {
     // ---- 2. Use manual total if provided, else computed ----
     const finalTotal = clientTotal !== undefined ? clientTotal : (computedTotal - discount);
 
+    // ---- validate splits if split payment ----
+    if (paymentMethod === 'split') {
+      if (!paymentSplits || !Array.isArray(paymentSplits) || paymentSplits.length === 0) throw new Error('paymentSplits required when paymentMethod is split');
+      const splitSum = paymentSplits.reduce((s, p) => s + Number(p.amount), 0);
+      if (Math.abs(splitSum - finalTotal) > 0.0001) throw new Error('Sum of paymentSplits amounts must equal total');
+    }
+
     // ---- 3. Create sale ----
     // Handle optional backdated sale (`saleDate` in YYYY-MM-DD). If provided and not today, set createdAt/updatedAt
-    const isPendingPayment = paymentMethod === 'pending' || paymentMethod === 'mpesa';
+    // Determine pending/completed: if any split is mpesa or pending, we set pending
+    let isPending = paymentMethod === 'pending' || paymentMethod === 'mpesa';
+    if (paymentMethod === 'split') {
+      const anyPendingOrMpesa = paymentSplits.some(p => p.method === 'mpesa' || p.method === 'pending');
+      isPending = anyPendingOrMpesa;
+    }
+
     const saleData = {
       orgId: user.orgId,
       branchId,
@@ -96,7 +124,8 @@ const createSale = async (req, res) => {
       total: finalTotal,
       discount,
       paymentMethod,
-      status: isPendingPayment ? 'pending' : 'completed',
+      paymentSplits: paymentMethod === 'split' ? paymentSplits.map(p => ({ ...p, completed: false })) : [],
+      status: isPending ? 'pending' : 'completed',
       phoneNumber: paymentMethod === 'mpesa' ? phoneNumber : null,
     };
 
@@ -115,8 +144,9 @@ const createSale = async (req, res) => {
 
     await sale.save({ session });
 
-// ---- 4. Deduct stock for cash/paybill ----
-    if (paymentMethod === 'cash' || paymentMethod === 'paybill') {
+// ---- 4. Deduct stock for immediate payments ----
+    const shouldDeductStock = paymentMethod === 'cash' || paymentMethod === 'paybill' || (paymentMethod === 'split' && (!paymentSplits || !paymentSplits.some(p => p.method === 'mpesa' || p.method === 'pending')));
+    if (shouldDeductStock) {
       for (const it of enriched) {
         await Product.findByIdAndUpdate(
           it.productId,
@@ -128,8 +158,10 @@ const createSale = async (req, res) => {
 
     await session.commitTransaction();
 
-    // ---- 5. M-PESA STK PUSH ----
+    // ---- 5. M-PESA STK PUSH (single mpesa or mpesa splits) ----
     let stkResponse = null;
+    const splitStkResponses = [];
+
     if (paymentMethod === 'mpesa') {
       try {
         stkResponse = await initiateSTKPush(phoneNumber, finalTotal, sale._id.toString());
@@ -145,7 +177,30 @@ const createSale = async (req, res) => {
       }
     }
 
-    res.status(201).json({ sale, mpesa: stkResponse });
+    if (paymentMethod === 'split') {
+      try {
+        // Initiate STK push for each mpesa split
+        for (let i = 0; i < sale.paymentSplits.length; i++) {
+          const sp = sale.paymentSplits[i];
+          if (sp.method === 'mpesa') {
+            try {
+              const resp = await initiateSTKPush(sp.phoneNumber, sp.amount, sale._id.toString());
+              // store the checkout id into the specific split
+              await Sale.findByIdAndUpdate(sale._id, { $set: { [`paymentSplits.${i}.stkRequestID`]: resp.CheckoutRequestID } });
+              splitStkResponses.push({ index: i, CheckoutRequestID: resp.CheckoutRequestID });
+              console.log(`Split STK Push Success (split ${i}): ${resp.CheckoutRequestID}`);
+            } catch (err) {
+              console.error('Split STK Push Failed:', { index: i, error: err.message, response: err.response?.data, status: err.response?.status });
+              splitStkResponses.push({ index: i, error: 'STK push failed' });
+            }
+          }
+        }
+      } catch (e) {
+        console.error('Split STK processing error:', e);
+      }
+    }
+
+    res.status(201).json({ sale, mpesa: stkResponse, splitMpesa: splitStkResponses });
   } catch (err) {
     await session.abortTransaction();
     res.status(400).json({ message: err.message });

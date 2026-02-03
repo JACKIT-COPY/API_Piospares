@@ -102,23 +102,65 @@ const handleCallback = async (req, res) => {
     const checkoutId = cb.CheckoutRequestID;
 
     const Sale = require('../models/Sale');
-    const sale = await Sale.findOne({ 
-      stkRequestID: checkoutId,
-      status: 'pending', 
-      paymentMethod: 'mpesa' 
+    // First try matching top-level mpesa flow, or any split that has this stkRequestID
+    const sale = await Sale.findOne({
+      status: 'pending',
+      $or: [
+        { stkRequestID: checkoutId, paymentMethod: 'mpesa' },
+        { paymentSplits: { $elemMatch: { stkRequestID: checkoutId } } }
+      ]
     });
 
     if (!sale) {
       console.error('Sale not found for callback:', { checkoutId, amount });
       return;
     }
-    if (Number(amount) !== Number(sale.total)) {
-      console.error('Amount mismatch:', { expected: sale.total, received: amount });
+
+    // SINGLE MPESA (legacy)
+    if (sale.paymentMethod === 'mpesa' && sale.stkRequestID === checkoutId) {
+      if (Number(amount) !== Number(sale.total)) {
+        console.error('Amount mismatch:', { expected: sale.total, received: amount });
+        return;
+      }
+
+      await updateSaleStatusInternal(sale._id, 'completed', 'mpesa', receipt);
+      console.log(`Sale ${sale._id} completed via M-Pesa – receipt ${receipt}`);
       return;
     }
 
-    await updateSaleStatusInternal(sale._id, 'completed', 'mpesa', receipt);
-    console.log(`Sale ${sale._id} completed via M-Pesa – receipt ${receipt}`);
+    // SPLIT PAYMENT: find the matching split and mark it completed
+    if (sale.paymentMethod === 'split') {
+      const splitIdx = sale.paymentSplits.findIndex(s => s.stkRequestID === checkoutId);
+      if (splitIdx === -1) {
+        console.error('No matching split found for stkRequestID:', checkoutId);
+        return;
+      }
+
+      const split = sale.paymentSplits[splitIdx];
+      if (Number(amount) !== Number(split.amount)) {
+        console.error('Split amount mismatch:', { expected: split.amount, received: amount, saleId: sale._id });
+        return;
+      }
+
+      // mark split as completed and set receipt
+      await Sale.findByIdAndUpdate(sale._id, { $set: { [`paymentSplits.${splitIdx}.completed`]: true, [`paymentSplits.${splitIdx}.receiptNumber`]: receipt } });
+      console.log(`Sale ${sale._id} split ${splitIdx} completed via M-Pesa – receipt ${receipt}`);
+
+      // re-fetch to check if all splits are completed
+      const freshSale = await Sale.findById(sale._id);
+      const allCompleted = freshSale.paymentSplits.every(s => s.completed || s.method === 'cash' || s.method === 'paybill');
+      const completedSum = freshSale.paymentSplits.reduce((s, p) => s + (p.completed ? Number(p.amount) : 0), 0);
+
+      if (allCompleted && Math.abs(completedSum - Number(freshSale.total)) < 0.0001) {
+        // mark sale completed
+        await updateSaleStatusInternal(freshSale._id, 'completed', 'split', receipt);
+        console.log(`Sale ${freshSale._id} completed via split payments.`);
+      }
+
+      return;
+    }
+
+    console.error('Unhandled mpesa callback case for sale', { saleId: sale._id, paymentMethod: sale.paymentMethod });
   } catch (err) {
     console.error('Callback processing error:', err);
   }

@@ -40,6 +40,26 @@ const router = express.Router();
  *           type: string
  *           description: Optional sale date in YYYY-MM-DD. If set and not today, will override the sale's createdAt timestamp.
  *           example: '2026-02-03'
+ *         paymentSplits:
+ *           type: array
+ *           description: Required when paymentMethod is 'split'. Each item must include a method and amount. mpesa splits require phoneNumber.
+ *           items:
+ *             type: object
+ *             properties:
+ *               method:
+ *                 type: string
+ *                 enum: [cash, mpesa, paybill, pending]
+ *               amount:
+ *                 type: number
+ *               phoneNumber:
+ *                 type: string
+ *                 description: Required for mpesa split
+ *           example:
+ *             - method: cash
+ *               amount: 5
+ *             - method: mpesa
+ *               amount: 10
+ *               phoneNumber: '2547XXXXXXXX'
  *     SaleUpdateStatus:
  *       type: object
  *       required:
