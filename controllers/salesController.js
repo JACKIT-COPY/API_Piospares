@@ -22,7 +22,7 @@ const createSchema = Joi.object({
     .required(),
   total: Joi.number().positive().optional(),  // Optional manual total
   discount: Joi.number().min(0).optional(),
-  paymentMethod: Joi.string().valid('cash', 'mpesa', 'paybill', 'pending').required(),
+  paymentMethod: Joi.string().valid('cash', 'mpesa', 'paybill', 'pending', 'split').required(),
   branchId: Joi.string().required(),
   saleDate: Joi.date().iso().max('now').optional(),
   paymentSplits: Joi.when('paymentMethod', {
