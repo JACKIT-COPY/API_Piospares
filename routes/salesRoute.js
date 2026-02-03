@@ -36,6 +36,10 @@ const router = express.Router();
  *           enum: [cash, mpesa, paybill, pending]
  *         branchId:
  *           type: string
+ *         saleDate:
+ *           type: string
+ *           description: Optional sale date in YYYY-MM-DD. If set and not today, will override the sale's createdAt timestamp.
+ *           example: '2026-02-03'
  *     SaleUpdateStatus:
  *       type: object
  *       required:

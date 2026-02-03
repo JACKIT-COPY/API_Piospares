@@ -24,6 +24,7 @@ const createSchema = Joi.object({
   discount: Joi.number().min(0).optional(),
   paymentMethod: Joi.string().valid('cash', 'mpesa', 'paybill', 'pending').required(),
   branchId: Joi.string().required(),
+  saleDate: Joi.date().iso().max('now').optional(),
   phoneNumber: Joi.when('paymentMethod', {
     is: 'mpesa',
     then: Joi.string().pattern(/^254[17]\d{8}$/).required(),
@@ -50,7 +51,7 @@ const createSale = async (req, res) => {
   session.startTransaction();
 
   try {
-    const { products, total: clientTotal, discount = 0, paymentMethod, branchId, phoneNumber } = req.body;
+    const { products, total: clientTotal, discount = 0, paymentMethod, branchId, phoneNumber, saleDate } = req.body;
     const user = req.user;
 
     // ---- 1. Enrich & validate products (use client prices, check stock/branch) ----
@@ -85,8 +86,9 @@ const createSale = async (req, res) => {
     const finalTotal = clientTotal !== undefined ? clientTotal : (computedTotal - discount);
 
     // ---- 3. Create sale ----
+    // Handle optional backdated sale (`saleDate` in YYYY-MM-DD). If provided and not today, set createdAt/updatedAt
     const isPendingPayment = paymentMethod === 'pending' || paymentMethod === 'mpesa';
-    const sale = new Sale({
+    const saleData = {
       orgId: user.orgId,
       branchId,
       userId: user.userId,
@@ -96,7 +98,20 @@ const createSale = async (req, res) => {
       paymentMethod,
       status: isPendingPayment ? 'pending' : 'completed',
       phoneNumber: paymentMethod === 'mpesa' ? phoneNumber : null,
-    });
+    };
+
+    if (saleDate) {
+      const saleDateObj = new Date(saleDate);
+      const saleDateKey = saleDateObj.toISOString().split('T')[0];
+      const todayKey = new Date().toISOString().split('T')[0];
+      if (saleDateKey !== todayKey) {
+        const overrideDate = new Date(saleDateKey);
+        saleData.createdAt = overrideDate;
+        saleData.updatedAt = overrideDate;
+      }
+    }
+
+    const sale = new Sale(saleData);
 
     await sale.save({ session });
 
