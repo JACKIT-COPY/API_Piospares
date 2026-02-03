@@ -31,6 +31,7 @@ const createSchema = Joi.object({
       Joi.object({
         method: Joi.string().valid('cash','mpesa','paybill','pending').required(),
         amount: Joi.number().positive().required(),
+        completed: Joi.boolean().optional(),
         phoneNumber: Joi.when('method', {
           is: 'mpesa',
           then: Joi.string().pattern(/^254[17]\d{8}$/).required(),
