@@ -1,7 +1,7 @@
 const express = require('express');
 const {
   createSupplier, listSuppliers, updateSupplier, deleteSupplier,
-  createPO, listPOs, updatePO, deletePO, receiveGoods
+  createPO, listPOs, updatePO, deletePO, receiveGoods, payPO
 } = require('../controllers/procurementController');
 const authMiddleware = require('../middlewares/authMiddleware');
 const roleMiddleware = require('../middlewares/roleMiddleware');
@@ -334,5 +334,45 @@ router.get('/purchase-orders', authMiddleware, roleMiddleware(['Owner', 'Manager
  *         description: Server error
  */
 router.post('/purchase-orders/:id/receive', authMiddleware, roleMiddleware(['Owner', 'Manager', 'SuperManager']), receiveGoods);
+
+/**
+ * @swagger
+ * /procurement/purchase-orders/{id}/pay:
+ *   post:
+ *     summary: Record payment for a purchase order
+ *     tags: [Procurement]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - amountPaid
+ *             properties:
+ *               amountPaid:
+ *                 type: number
+ *     responses:
+ *       200:
+ *         description: Payment recorded
+ *       400:
+ *         description: Bad request
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: PO not found
+ *       500:
+ *         description: Server error
+ */
+router.post('/purchase-orders/:id/pay', authMiddleware, roleMiddleware(['Owner', 'Manager', 'SuperManager']), payPO);
+
 
 module.exports = router;

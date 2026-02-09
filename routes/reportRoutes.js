@@ -35,20 +35,20 @@ const router = express.Router();
  *           enum: [inventory, sales, procurement, expenses, all]
  *           default: all
  *         description: Module to include
- *     responses:
- *       - name: module
- *         description: Report generated successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
  *       - name: branchId
  *         in: query
  *         schema:
  *           type: string
  *           format: uuid
  *         description: Branch id to filter the report (optional). If omitted, report is org-wide.
+ *     responses:
+ *       '200':
+ *         description: Report generated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
  *                 period:
  *                   type: object
  *                   properties:

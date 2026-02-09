@@ -334,7 +334,53 @@ const receiveGoods = async (req, res) => {
   }
 };
 
+// @desc    Payment for a purchase order
+// @route   POST /procurement/purchase-orders/:id/pay
+// @access  Owner/Manager/SuperManager
+const payPO = async (req, res) => {
+  const schema = Joi.object({
+    amountPaid: Joi.number().min(0.01).required()
+  });
+  const { error } = schema.validate(req.body);
+  if (error) return res.status(400).json({ message: error.details[0].message });
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  try {
+    const po = await PurchaseOrder.findOne({ _id: req.params.id, orgId: req.user.orgId, isDeleted: false }).session(session);
+    if (!po) return res.status(404).json({ message: 'Purchase Order not found' });
+
+    po.paidAmount = (po.paidAmount || 0) + req.body.amountPaid;
+    po.pendingAmount = Math.max(0, po.totalCost - po.paidAmount);
+
+    // If fully received and now fully paid, mark as completed
+    if (po.status === 'received' && po.pendingAmount === 0) {
+      po.status = 'completed';
+    }
+
+    po.updatedBy = req.user.userId;
+    await po.save({ session });
+
+    // Update associated expense if it exists
+    const expense = await Expense.findOne({ referenceId: po._id, orgId: req.user.orgId }).session(session);
+    if (expense) {
+      expense.status = po.pendingAmount === 0 ? 'Paid' : 'Pending';
+      expense.updatedBy = req.user.userId;
+      await expense.save({ session });
+    }
+
+    await session.commitTransaction();
+    res.json(po);
+  } catch (err) {
+    await session.abortTransaction();
+    res.status(500).json({ message: err.message });
+  } finally {
+    session.endSession();
+  }
+};
+
+
 module.exports = {
   createSupplier, updateSupplier, deleteSupplier, listSuppliers,
-  createPO, updatePO, deletePO, listPOs, receiveGoods
+  createPO, updatePO, deletePO, listPOs, receiveGoods, payPO
 };
