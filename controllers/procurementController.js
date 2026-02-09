@@ -218,7 +218,7 @@ const deletePO = async (req, res) => {
 // @access  Owner/Manager/Cashier/SuperManager
 const listPOs = async (req, res) => {
   try {
-    const { supplierId, status, branchId } = req.query;
+    const { supplierId, status, branchId, startDate, endDate } = req.query;
     const query = { orgId: req.user.orgId, isDeleted: false };
     if (supplierId) query.supplierId = supplierId;
     if (status) query.status = status;
@@ -229,7 +229,17 @@ const listPOs = async (req, res) => {
       if (!hasBranchAccess) return res.status(403).json({ message: 'Branch not accessible' });
       query.branchId = branchId;
     }
-    const pos = await PurchaseOrder.find(query).populate('supplierId', 'name').lean();
+
+    if (startDate || endDate) {
+      query.createdAt = {};
+      if (startDate) query.createdAt.$gte = new Date(startDate);
+      if (endDate) query.createdAt.$lte = new Date(endDate);
+    }
+
+    const pos = await PurchaseOrder.find(query)
+      .populate('supplierId', 'name contactEmail contactPhone address')
+      .sort({ createdAt: -1 })
+      .lean();
     res.json(pos);
   } catch (err) {
     res.status(500).json({ message: err.message });
