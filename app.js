@@ -19,6 +19,7 @@ const compression = require('compression');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 const mpesaRoutes = require('./routes/mpesaRoutes');
+const superAdminRoutes = require('./routes/superAdminRoutes');
 
 dotenv.config();
 connectDB();
@@ -69,6 +70,7 @@ app.use('/procurement', procurementRoutes);
 app.use('/expenses', expenseRoutes); // New expenses routes
 app.use('/reports', reportRoutes); // New reports routes
 app.use('/mpesa', mpesaRoutes);
+app.use('/super-admin', superAdminRoutes);
 
 // Swagger
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs));
