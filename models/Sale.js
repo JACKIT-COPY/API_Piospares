@@ -5,6 +5,7 @@ const saleSchema = new mongoose.Schema({
   orgId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', required: true },
   branchId: { type: mongoose.Schema.Types.ObjectId, ref: 'Branch', required: true },
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer', default: null },
 
   products: [{
     productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
