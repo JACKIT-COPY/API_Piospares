@@ -165,6 +165,9 @@ const login = async (req, res) => {
     }
 
     // Fetch organization (for non-SuperAdmins)
+    if (!user.orgId) {
+      return res.status(400).json({ message: 'User account is not linked to any organization. Please contact support.' });
+    }
     const organization = await Organization.findById(user.orgId).lean();
     if (!organization) return res.status(404).json({ message: 'Organization not found' });
 
