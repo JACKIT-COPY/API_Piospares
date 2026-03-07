@@ -7,6 +7,7 @@ const organizationSchema = new mongoose.Schema({
   address: { type: String },
   status: { type: String, enum: ['Active', 'Suspended', 'Inactive'], default: 'Active' },
   plan: { type: String, enum: ['Free', 'Basic', 'Premium'], default: 'Free' },
+  messagingApiKey: { type: String, optional: true },
   suspendedAt: { type: Date },
   suspendedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   notes: { type: String }

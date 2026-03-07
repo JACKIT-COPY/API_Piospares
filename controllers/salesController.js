@@ -223,15 +223,18 @@ const createSale = async (req, res) => {
 // ──────────────────────────────────────────────────────────────
 const listSales = async (req, res) => {
   try {
-    const { branchId, status, page = 1, limit = 500 } = req.query; //add limit to 500 paginated
+    const { branchId, status, customerId, page = 1, limit = 500 } = req.query; //add limit to 500 paginated
     const query = {
       orgId: req.user.orgId,
       isDeleted: false  // ← ADD THIS TO EXCLUDE DELETED SALES
     };
     if (branchId) query.branchId = branchId;
     if (status) query.status = status;
+    if (customerId) query.customerId = customerId;
 
     const sales = await Sale.find(query)
+      .populate('customerId', 'name phone email address')
+      .populate('userId', 'name')
       .sort({ createdAt: -1 })
       .skip((page - 1) * limit)
       .limit(Number(limit))
