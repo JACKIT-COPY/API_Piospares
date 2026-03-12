@@ -118,8 +118,75 @@ const deleteSupplier = async (req, res) => {
 // @access  Owner/Manager/Cashier/SuperManager
 const listSuppliers = async (req, res) => {
   try {
-    const suppliers = await Supplier.find({ orgId: req.user.orgId, isDeleted: false }).lean();
+    const mongoose = require('mongoose');
+    const query = { orgId: new mongoose.Types.ObjectId(req.user.orgId), isDeleted: false };
+
+    const pipeline = [
+      { $match: query },
+      {
+        $lookup: {
+          from: 'purchaseorders',
+          let: { supplierId: '$_id' },
+          pipeline: [
+            { $match: { $expr: { $and: [{ $eq: ['$supplierId', '$$supplierId'] }, { $ne: ['$isDeleted', true] }] } } }
+          ],
+          as: 'supplierPOs'
+        }
+      },
+      {
+        $addFields: {
+          totalProcured: { $sum: '$supplierPOs.totalCost' },
+          poVolume: { $size: '$supplierPOs' }
+        }
+      },
+      { $project: { supplierPOs: 0 } },
+      { $sort: { createdAt: -1 } }
+    ];
+
+    const suppliers = await Supplier.aggregate(pipeline);
     res.json(suppliers);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// @desc    Get top supplier for the current month
+// @route   GET /procurement/suppliers/top-this-month
+// @access  Owner/Manager/Cashier/SuperManager
+const getTopSupplierThisMonth = async (req, res) => {
+  try {
+    const startOfMonth = new Date();
+    startOfMonth.setDate(1);
+    startOfMonth.setHours(0, 0, 0, 0);
+
+    const mongoose = require('mongoose');
+    const orgId = new mongoose.Types.ObjectId(req.user.orgId);
+
+    const topSupplier = await mongoose.model('PurchaseOrder').aggregate([
+      {
+        $match: {
+          orgId,
+          isDeleted: false,
+          status: { $in: ['completed', 'received'] },
+          createdAt: { $gte: startOfMonth },
+          supplierId: { $ne: null }
+        }
+      },
+      {
+        $group: {
+          _id: '$supplierId',
+          totalProcured: { $sum: '$totalCost' }
+        }
+      },
+      { $sort: { totalProcured: -1 } },
+      { $limit: 1 }
+    ]);
+
+    if (topSupplier.length > 0) {
+      res.json({ supplierId: topSupplier[0]._id });
+    } else {
+      res.json({ supplierId: null });
+    }
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -381,6 +448,6 @@ const payPO = async (req, res) => {
 
 
 module.exports = {
-  createSupplier, updateSupplier, deleteSupplier, listSuppliers,
+  createSupplier, updateSupplier, deleteSupplier, listSuppliers, getTopSupplierThisMonth,
   createPO, updatePO, deletePO, listPOs, receiveGoods, payPO
 };

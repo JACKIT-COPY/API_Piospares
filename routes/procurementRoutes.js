@@ -1,6 +1,6 @@
 const express = require('express');
 const {
-  createSupplier, listSuppliers, updateSupplier, deleteSupplier,
+  createSupplier, listSuppliers, updateSupplier, deleteSupplier, getTopSupplierThisMonth,
   createPO, listPOs, updatePO, deletePO, receiveGoods, payPO
 } = require('../controllers/procurementController');
 const authMiddleware = require('../middlewares/authMiddleware');
@@ -165,6 +165,24 @@ router.put('/suppliers/:id', authMiddleware, roleMiddleware(['Owner', 'Manager',
  *         description: Server error
  */
 router.delete('/suppliers/:id', authMiddleware, roleMiddleware(['Owner', 'Manager', 'SuperManager']), deleteSupplier);
+
+/**
+ * @swagger
+ * /procurement/suppliers/top-this-month:
+ *   get:
+ *     summary: Get top supplier for the current month
+ *     tags: [Procurement]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Top supplier ID
+ *       401:
+ *         description: Unauthorized
+ *       500:
+ *         description: Server error
+ */
+router.get('/suppliers/top-this-month', authMiddleware, roleMiddleware(['Owner', 'Manager', 'Cashier', 'SuperManager']), getTopSupplierThisMonth);
 
 /**
  * @swagger
