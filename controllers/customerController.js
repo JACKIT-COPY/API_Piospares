@@ -29,8 +29,10 @@ const createCustomer = async (req, res) => {
 
 const listCustomers = async (req, res) => {
     try {
-        const { search, page = 1, limit = 10 } = req.query;
-        const query = { orgId: req.user.orgId, isDeleted: false };
+        const { search, page = 1, limit = 10, sort = 'name' } = req.query;
+        // require mongoose to convert orgId string to ObjectId safely inside listCustomers or use the already imported one if there is
+        const mongoose = require('mongoose');
+        const query = { orgId: new mongoose.Types.ObjectId(req.user.orgId), isDeleted: false };
 
         if (search) {
             query.$or = [
@@ -40,18 +42,48 @@ const listCustomers = async (req, res) => {
             ];
         }
 
-        const customers = await Customer.find(query)
-            .sort({ name: 1 })
-            .limit(limit * 1)
-            .skip((page - 1) * limit)
-            .exec();
+        const pageNum = parseInt(page);
+        const limitNum = parseInt(limit);
+        const skip = (pageNum - 1) * limitNum;
 
+        let sortObj = { name: 1 };
+        if (sort === 'top_spenders') {
+            sortObj = { totalSpent: -1 };
+        } else if (sort === 'volume') {
+            sortObj = { salesVolume: -1 };
+        }
+
+        const pipeline = [
+            { $match: query },
+            {
+                $lookup: {
+                    from: 'sales',
+                    let: { customerId: '$_id' },
+                    pipeline: [
+                        { $match: { $expr: { $and: [{ $eq: ['$customerId', '$$customerId'] }, { $ne: ['$isDeleted', true] }] } } }
+                    ],
+                    as: 'customerSales'
+                }
+            },
+            {
+                $addFields: {
+                    totalSpent: { $sum: '$customerSales.total' },
+                    salesVolume: { $size: '$customerSales' }
+                }
+            },
+            { $project: { customerSales: 0 } },
+            { $sort: sortObj },
+            { $skip: skip },
+            { $limit: limitNum }
+        ];
+
+        const customers = await Customer.aggregate(pipeline);
         const count = await Customer.countDocuments(query);
 
         res.json({
             customers,
-            totalPages: Math.ceil(count / limit),
-            currentPage: page,
+            totalPages: Math.ceil(count / limitNum),
+            currentPage: pageNum,
             totalCustomers: count,
         });
     } catch (err) {
@@ -102,10 +134,50 @@ const deleteCustomer = async (req, res) => {
     }
 };
 
+const getTopCustomerThisMonth = async (req, res) => {
+    try {
+        const startOfMonth = new Date();
+        startOfMonth.setDate(1);
+        startOfMonth.setHours(0, 0, 0, 0);
+
+        const mongoose = require('mongoose');
+        const orgId = new mongoose.Types.ObjectId(req.user.orgId);
+
+        const topCustomer = await mongoose.model('Sale').aggregate([
+            {
+                $match: {
+                    orgId,
+                    isDeleted: false,
+                    status: 'completed',
+                    createdAt: { $gte: startOfMonth },
+                    customerId: { $ne: null }
+                }
+            },
+            {
+                $group: {
+                    _id: '$customerId',
+                    totalSpent: { $sum: '$total' }
+                }
+            },
+            { $sort: { totalSpent: -1 } },
+            { $limit: 1 }
+        ]);
+
+        if (topCustomer.length > 0) {
+            res.json({ customerId: topCustomer[0]._id });
+        } else {
+            res.json({ customerId: null });
+        }
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+};
+
 module.exports = {
     createCustomer,
     listCustomers,
     getCustomerById,
     updateCustomer,
     deleteCustomer,
+    getTopCustomerThisMonth,
 };
