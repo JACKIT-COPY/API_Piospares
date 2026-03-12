@@ -29,8 +29,7 @@ const createCustomer = async (req, res) => {
 
 const listCustomers = async (req, res) => {
     try {
-        const { search, page = 1, limit = 10, sort = 'name' } = req.query;
-        // require mongoose to convert orgId string to ObjectId safely inside listCustomers or use the already imported one if there is
+        const { search, page = 1, limit = 10, sort = 'name', branchId } = req.query;
         const mongoose = require('mongoose');
         const query = { orgId: new mongoose.Types.ObjectId(req.user.orgId), isDeleted: false };
 
@@ -53,6 +52,15 @@ const listCustomers = async (req, res) => {
             sortObj = { salesVolume: -1 };
         }
 
+        // Build the sales lookup match condition — optionally filter by branchId
+        const salesMatchExpr = [
+            { $eq: ['$customerId', '$$customerId'] },
+            { $ne: ['$isDeleted', true] }
+        ];
+        if (branchId) {
+            salesMatchExpr.push({ $eq: ['$branchId', new mongoose.Types.ObjectId(branchId)] });
+        }
+
         const pipeline = [
             { $match: query },
             {
@@ -60,7 +68,7 @@ const listCustomers = async (req, res) => {
                     from: 'sales',
                     let: { customerId: '$_id' },
                     pipeline: [
-                        { $match: { $expr: { $and: [{ $eq: ['$customerId', '$$customerId'] }, { $ne: ['$isDeleted', true] }] } } }
+                        { $match: { $expr: { $and: salesMatchExpr } } }
                     ],
                     as: 'customerSales'
                 }
@@ -71,6 +79,8 @@ const listCustomers = async (req, res) => {
                     salesVolume: { $size: '$customerSales' }
                 }
             },
+            // When filtering by branch, exclude customers with zero sales at that branch
+            ...(branchId ? [{ $match: { salesVolume: { $gt: 0 } } }] : []),
             { $project: { customerSales: 0 } },
             { $sort: sortObj },
             { $skip: skip },
@@ -78,7 +88,31 @@ const listCustomers = async (req, res) => {
         ];
 
         const customers = await Customer.aggregate(pipeline);
-        const count = await Customer.countDocuments(query);
+
+        // For count, we need a separate pipeline when branchId is provided
+        let count;
+        if (branchId) {
+            const countPipeline = [
+                { $match: query },
+                {
+                    $lookup: {
+                        from: 'sales',
+                        let: { customerId: '$_id' },
+                        pipeline: [
+                            { $match: { $expr: { $and: salesMatchExpr } } }
+                        ],
+                        as: 'customerSales'
+                    }
+                },
+                { $addFields: { salesVolume: { $size: '$customerSales' } } },
+                { $match: { salesVolume: { $gt: 0 } } },
+                { $count: 'total' }
+            ];
+            const countResult = await Customer.aggregate(countPipeline);
+            count = countResult.length > 0 ? countResult[0].total : 0;
+        } else {
+            count = await Customer.countDocuments(query);
+        }
 
         res.json({
             customers,
@@ -136,6 +170,7 @@ const deleteCustomer = async (req, res) => {
 
 const getTopCustomerThisMonth = async (req, res) => {
     try {
+        const { branchId } = req.query;
         const startOfMonth = new Date();
         startOfMonth.setDate(1);
         startOfMonth.setHours(0, 0, 0, 0);
@@ -143,16 +178,19 @@ const getTopCustomerThisMonth = async (req, res) => {
         const mongoose = require('mongoose');
         const orgId = new mongoose.Types.ObjectId(req.user.orgId);
 
+        const matchStage = {
+            orgId,
+            isDeleted: false,
+            status: 'completed',
+            createdAt: { $gte: startOfMonth },
+            customerId: { $ne: null }
+        };
+        if (branchId) {
+            matchStage.branchId = new mongoose.Types.ObjectId(branchId);
+        }
+
         const topCustomer = await mongoose.model('Sale').aggregate([
-            {
-                $match: {
-                    orgId,
-                    isDeleted: false,
-                    status: 'completed',
-                    createdAt: { $gte: startOfMonth },
-                    customerId: { $ne: null }
-                }
-            },
+            { $match: matchStage },
             {
                 $group: {
                     _id: '$customerId',

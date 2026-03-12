@@ -118,8 +118,18 @@ const deleteSupplier = async (req, res) => {
 // @access  Owner/Manager/Cashier/SuperManager
 const listSuppliers = async (req, res) => {
   try {
+    const { branchId } = req.query;
     const mongoose = require('mongoose');
     const query = { orgId: new mongoose.Types.ObjectId(req.user.orgId), isDeleted: false };
+
+    // Build the PO lookup match condition — optionally filter by branchId
+    const poMatchExpr = [
+      { $eq: ['$supplierId', '$$supplierId'] },
+      { $ne: ['$isDeleted', true] }
+    ];
+    if (branchId) {
+      poMatchExpr.push({ $eq: ['$branchId', new mongoose.Types.ObjectId(branchId)] });
+    }
 
     const pipeline = [
       { $match: query },
@@ -128,7 +138,7 @@ const listSuppliers = async (req, res) => {
           from: 'purchaseorders',
           let: { supplierId: '$_id' },
           pipeline: [
-            { $match: { $expr: { $and: [{ $eq: ['$supplierId', '$$supplierId'] }, { $ne: ['$isDeleted', true] }] } } }
+            { $match: { $expr: { $and: poMatchExpr } } }
           ],
           as: 'supplierPOs'
         }
@@ -155,6 +165,7 @@ const listSuppliers = async (req, res) => {
 // @access  Owner/Manager/Cashier/SuperManager
 const getTopSupplierThisMonth = async (req, res) => {
   try {
+    const { branchId } = req.query;
     const startOfMonth = new Date();
     startOfMonth.setDate(1);
     startOfMonth.setHours(0, 0, 0, 0);
@@ -162,16 +173,19 @@ const getTopSupplierThisMonth = async (req, res) => {
     const mongoose = require('mongoose');
     const orgId = new mongoose.Types.ObjectId(req.user.orgId);
 
+    const matchStage = {
+      orgId,
+      isDeleted: false,
+      status: { $in: ['completed', 'received'] },
+      createdAt: { $gte: startOfMonth },
+      supplierId: { $ne: null }
+    };
+    if (branchId) {
+      matchStage.branchId = new mongoose.Types.ObjectId(branchId);
+    }
+
     const topSupplier = await mongoose.model('PurchaseOrder').aggregate([
-      {
-        $match: {
-          orgId,
-          isDeleted: false,
-          status: { $in: ['completed', 'received'] },
-          createdAt: { $gte: startOfMonth },
-          supplierId: { $ne: null }
-        }
-      },
+      { $match: matchStage },
       {
         $group: {
           _id: '$supplierId',
