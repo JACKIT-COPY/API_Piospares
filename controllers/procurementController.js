@@ -279,18 +279,53 @@ const updatePO = async (req, res) => {
 
 // @desc    Delete a purchase order (soft delete)
 // @route   DELETE /procurement/purchase-orders/:id
-// @access  Owner/Manager/SuperManager
+// @access  Owner ONLY (for stock reversal and expense cleanup)
 const deletePO = async (req, res) => {
+  if (req.user.role !== 'Owner') {
+    return res.status(403).json({ message: 'Only an Owner can delete a Purchase Order' });
+  }
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
   try {
-    const po = await PurchaseOrder.findOneAndUpdate(
-      { _id: req.params.id, orgId: req.user.orgId, isDeleted: false },
-      { isDeleted: true, updatedBy: req.user.userId },
-      { new: true }
-    );
+    const po = await PurchaseOrder.findOne({ _id: req.params.id, orgId: req.user.orgId, isDeleted: false }).session(session);
     if (!po) return res.status(404).json({ message: 'Purchase Order not found' });
-    res.json({ message: 'Purchase Order deleted' });
+
+    // 1. Revert stock if any goods were received
+    if (['received', 'completed', 'ordered'].includes(po.status)) {
+      for (const item of po.items) {
+        if (item.receivedQuantity > 0) {
+          const product = await Product.findOne({ _id: item.productId, orgId: req.user.orgId, branchId: po.branchId }).session(session);
+          if (product) {
+            await Product.findOneAndUpdate(
+              { _id: item.productId, orgId: req.user.orgId, branchId: po.branchId },
+              { $inc: { stock: -item.receivedQuantity } },
+              { session }
+            );
+          }
+        }
+      }
+    }
+
+    // 2. Remove recorded expenses associated with this PO
+    await Expense.updateMany(
+      { referenceId: po._id, orgId: req.user.orgId, isDeleted: false },
+      { isDeleted: true, updatedBy: req.user.userId },
+      { session }
+    );
+
+    // 3. Mark PO as deleted
+    po.isDeleted = true;
+    po.updatedBy = req.user.userId;
+    await po.save({ session });
+
+    await session.commitTransaction();
+    res.json({ message: 'Purchase Order deleted, stock reverted, and expenses removed' });
   } catch (err) {
+    await session.abortTransaction();
     res.status(500).json({ message: err.message });
+  } finally {
+    session.endSession();
   }
 };
 
@@ -393,6 +428,7 @@ const receiveGoods = async (req, res) => {
           description: `Expense for PO ${po._id} from supplier ${po.supplierId}`,
           dateIncurred: new Date(),
           status: po.pendingAmount === 0 ? 'Paid' : 'Pending',
+          supplierId: po.supplierId,
           referenceId: po._id,
           createdBy: req.user.userId,
           updatedBy: req.user.userId
@@ -400,6 +436,7 @@ const receiveGoods = async (req, res) => {
       } else {
         expense.status = po.pendingAmount === 0 ? 'Paid' : 'Pending';
         expense.amount = po.totalCost;
+        expense.supplierId = po.supplierId;
         expense.updatedBy = req.user.userId;
       }
       await expense.save({ session });

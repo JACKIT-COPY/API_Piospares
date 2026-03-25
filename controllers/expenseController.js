@@ -30,7 +30,8 @@ const createExpenseSchema = Joi.object({
   description: Joi.string().allow('').optional(),
   dateIncurred: Joi.date().required(),
   status: Joi.string().valid('Pending', 'Paid', 'Overdue').optional(),
-  paymentMethod: Joi.string().valid('Cash', 'BankTransfer', 'MobilePayment', 'Credit').optional()
+  paymentMethod: Joi.string().valid('Cash', 'BankTransfer', 'MobilePayment', 'Credit').optional(),
+  supplierId: Joi.string().allow('', null).optional()
 });
 
 const updateExpenseSchema = createExpenseSchema.options({ presence: 'optional' }).min(1);
@@ -150,7 +151,9 @@ const listExpenses = async (req, res) => {
       if (endDate) query.dateIncurred.$lte = new Date(endDate);
     }
 
-    const expenses = await Expense.find(query).lean();
+    const expenses = await Expense.find(query)
+      .populate('supplierId', 'name contactEmail contactPhone')
+      .lean();
     res.json(expenses);
   } catch (err) {
     res.status(500).json({ message: err.message });
