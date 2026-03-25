@@ -282,6 +282,11 @@ const softDeleteSale = async (req, res) => {
   const { id } = req.params;
   const user = req.user;
 
+  // Only Owner or SuperManager can delete sales
+  if (user.role !== 'Owner' && user.role !== 'SuperManager') {
+    return res.status(403).json({ message: 'Security Alert: Only Owners or SuperManagers can delete sales records.' });
+  }
+
   const session = await mongoose.startSession();
   session.startTransaction();
 
