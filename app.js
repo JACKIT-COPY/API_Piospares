@@ -22,6 +22,8 @@ const rateLimit = require('express-rate-limit');
 const mpesaRoutes = require('./routes/mpesaRoutes');
 const superAdminRoutes = require('./routes/superAdminRoutes');
 const customerRoutes = require('./routes/customerRoutes');
+const debtorsRoutes = require('./routes/debtorsRoutes');
+const creditorsRoutes = require('./routes/creditorsRoutes');
 
 dotenv.config();
 connectDB();
@@ -75,6 +77,8 @@ app.use('/messaging', messagingRoutes);
 app.use('/mpesa', mpesaRoutes);
 app.use('/super-admin', superAdminRoutes);
 app.use('/customers', customerRoutes);
+app.use('/debtors', debtorsRoutes);
+app.use('/creditors', creditorsRoutes);
 
 // Swagger
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs));
