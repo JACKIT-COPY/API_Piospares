@@ -48,7 +48,9 @@ const forwardToUnifiedApi = async (req, res) => {
             headers: {
                 "Content-Type": "application/json",
                 "UNIFIED-API-Key": apiKey
-            }
+            },
+            maxBodyLength: Infinity,
+            maxContentLength: Infinity
         };
 
         if (req.method !== 'GET' && req.method !== 'HEAD') {
