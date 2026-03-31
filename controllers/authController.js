@@ -145,7 +145,29 @@ const login = async (req, res) => {
     const isMatch = await bcrypt.compare(password, user.passwordHash);
     if (!isMatch) return res.status(400).json({ message: 'Invalid credentials' });
 
-    // Fetch organization
+    // Handle SuperAdmin separately
+    if (user.role === 'SuperAdmin') {
+      const payload = { userId: user._id, role: user.role };
+      const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '8h' });
+
+      return res.json({
+        token,
+        user: {
+          _id: user._id.toString(),
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          orgId: null,
+          orgName: 'System Administration',
+          branches: []
+        }
+      });
+    }
+
+    // Fetch organization (for non-SuperAdmins)
+    if (!user.orgId) {
+      return res.status(400).json({ message: 'User account is not linked to any organization. Please contact support.' });
+    }
     const organization = await Organization.findById(user.orgId).lean();
     if (!organization) return res.status(404).json({ message: 'Organization not found' });
 

@@ -6,7 +6,8 @@ const updateSchema = Joi.object({
   name: Joi.string().min(3).max(100).optional(),
   email: Joi.string().email().optional(),
   phone: Joi.string().pattern(/^\+?[1-9]\d{1,14}$/).optional(),
-  address: Joi.string().max(200).optional()
+  address: Joi.string().max(200).optional(),
+  messagingApiKey: Joi.string().allow('', null).optional()
 });
 
 // @desc    Get organization details

@@ -24,12 +24,13 @@ const createSchema = Joi.object({
   discount: Joi.number().min(0).optional(),
   paymentMethod: Joi.string().valid('cash', 'mpesa', 'paybill', 'pending', 'split').required(),
   branchId: Joi.string().required(),
+  customerId: Joi.string().allow(null, '').optional(),
   saleDate: Joi.date().iso().max('now').optional(),
   paymentSplits: Joi.when('paymentMethod', {
     is: 'split',
     then: Joi.array().items(
       Joi.object({
-        method: Joi.string().valid('cash','mpesa','paybill','pending').required(),
+        method: Joi.string().valid('cash', 'mpesa', 'paybill', 'pending').required(),
         amount: Joi.number().positive().required(),
         completed: Joi.boolean().optional(),
         phoneNumber: Joi.when('method', {
@@ -67,7 +68,7 @@ const createSale = async (req, res) => {
   session.startTransaction();
 
   try {
-    const { products, total: clientTotal, discount = 0, paymentMethod, branchId, phoneNumber, saleDate, paymentSplits } = req.body;
+    const { products, total: clientTotal, discount = 0, paymentMethod, branchId, customerId, phoneNumber, saleDate, paymentSplits } = req.body;
     const user = req.user;
 
     // ---- 1. Enrich & validate products (use client prices, check stock/branch) ----
@@ -121,16 +122,17 @@ const createSale = async (req, res) => {
       orgId: user.orgId,
       branchId,
       userId: user.userId,
+      customerId: customerId || null,
       products: enriched,
       total: finalTotal,
       discount,
       paymentMethod,
       paymentSplits: paymentMethod === 'split'
         ? paymentSplits.map(p => ({
-            ...p,
-            // cash and paybill are completed by default; mpesa and pending remain not completed
-            completed: typeof p.completed === 'boolean' ? p.completed : (p.method === 'cash' || p.method === 'paybill')
-          }))
+          ...p,
+          // cash and paybill are completed by default; mpesa and pending remain not completed
+          completed: typeof p.completed === 'boolean' ? p.completed : (p.method === 'cash' || p.method === 'paybill')
+        }))
         : [],
       status: isPending ? 'pending' : 'completed',
       phoneNumber: paymentMethod === 'mpesa' ? phoneNumber : null,
@@ -151,7 +153,7 @@ const createSale = async (req, res) => {
 
     await sale.save({ session });
 
-// ---- 4. Deduct stock for immediate payments ----
+    // ---- 4. Deduct stock for immediate payments ----
     const shouldDeductStock = paymentMethod === 'cash' || paymentMethod === 'paybill' || (paymentMethod === 'split' && (!paymentSplits || !paymentSplits.some(p => p.method === 'mpesa' || p.method === 'pending')));
     if (shouldDeductStock) {
       for (const it of enriched) {
@@ -221,15 +223,18 @@ const createSale = async (req, res) => {
 // ──────────────────────────────────────────────────────────────
 const listSales = async (req, res) => {
   try {
-    const { branchId, status, page = 1, limit = 500 } = req.query; //add limit to 500 paginated
-    const query = { 
+    const { branchId, status, customerId, page = 1, limit = 500 } = req.query; //add limit to 500 paginated
+    const query = {
       orgId: req.user.orgId,
       isDeleted: false  // ← ADD THIS TO EXCLUDE DELETED SALES
     };
     if (branchId) query.branchId = branchId;
     if (status) query.status = status;
+    if (customerId) query.customerId = customerId;
 
     const sales = await Sale.find(query)
+      .populate('customerId', 'name phone email address')
+      .populate('userId', 'name')
       .sort({ createdAt: -1 })
       .skip((page - 1) * limit)
       .limit(Number(limit))
@@ -276,6 +281,11 @@ const updateSaleStatus = async (req, res) => {
 const softDeleteSale = async (req, res) => {
   const { id } = req.params;
   const user = req.user;
+
+  // Only Owner or SuperManager can delete sales
+  if (user.role !== 'Owner' && user.role !== 'SuperManager') {
+    return res.status(403).json({ message: 'Security Alert: Only Owners or SuperManagers can delete sales records.' });
+  }
 
   const session = await mongoose.startSession();
   session.startTransaction();

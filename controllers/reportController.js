@@ -35,6 +35,32 @@ const inventoryReport = async (orgId, branchId, start, end) => {
     .populate('categoryId', 'name')  // This is the key line
     .lean();
 
+  // Fetch sales to get product sales data
+  const saleQuery = {
+    orgId: new mongoose.Types.ObjectId(orgId),
+    isDeleted: false
+  };
+  if (branchId) saleQuery.branchId = new mongoose.Types.ObjectId(branchId);
+  const sales = await Sale.find(saleQuery).lean();
+
+  // Build product sales map
+  const productSalesMap = {};
+  sales.forEach(sale => {
+    if (sale.products) {
+      sale.products.forEach(prod => {
+        const prodId = prod.productId?.toString() || prod._id?.toString();
+        if (!productSalesMap[prodId]) {
+          productSalesMap[prodId] = { totalUnits: 0, lastSoldDate: null };
+        }
+        productSalesMap[prodId].totalUnits += prod.quantity || 0;
+        const saleDate = new Date(sale.createdAt);
+        if (!productSalesMap[prodId].lastSoldDate || saleDate > new Date(productSalesMap[prodId].lastSoldDate)) {
+          productSalesMap[prodId].lastSoldDate = sale.createdAt;
+        }
+      });
+    }
+  });
+
   const totalValue = products.reduce((sum, p) => sum + (p.stock * p.price), 0);
   const totalCost = products.reduce((sum, p) => sum + (p.stock * (p.averageCost || p.buyingPrice || 0)), 0);
   const totalProfit = totalValue - totalCost;
@@ -71,9 +97,16 @@ const inventoryReport = async (orgId, branchId, start, end) => {
     byBranch[branch].value += p.stock * p.price;
     byBranch[branch].qty += p.stock;
 
-    // Top products
+    // Top products with sales data
+    const salesData = productSalesMap[p._id.toString()] || { totalUnits: 0, lastSoldDate: null };
+    topByQty.push({ 
+      _id: p._id, 
+      name: p.name, 
+      qty: p.stock,
+      totalUnitsSold: salesData.totalUnits,
+      lastSoldDate: salesData.lastSoldDate
+    });
     topByValue.push({ _id: p._id, name: p.name, value: p.stock * p.price });
-    topByQty.push({ _id: p._id, name: p.name, qty: p.stock });
   });
 
   // Calculate profit & margin
@@ -82,6 +115,12 @@ const inventoryReport = async (orgId, branchId, start, end) => {
     cat.profit = cat.value - cat.cost;
     cat.margin = cat.value ? (cat.profit / cat.value) * 100 : 0;
   });
+
+  // Determine fast vs slow moving: fast if totalUnitsSold > 5, slow otherwise
+  const topByQtyWithMovement = topByQty.sort((a, b) => b.qty - a.qty).slice(0, 10).map(p => ({
+    ...p,
+    sellIntensity: p.totalUnitsSold > 5 ? 'fast' : 'slow'
+  }));
 
   return {
     totalInventoryValue: totalValue,
@@ -102,7 +141,16 @@ const inventoryReport = async (orgId, branchId, start, end) => {
     byBranch: Object.entries(byBranch).map(([id, data]) => ({ branchId: id, ...data })),
 
     topProductsByValue: topByValue.sort((a, b) => b.value - a.value).slice(0, 10),
-    topProductsByQuantity: topByQty.sort((a, b) => b.qty - a.qty).slice(0, 10),
+    topProductsByQuantity: topByQtyWithMovement,
+
+    // Stale stock (never sold/moved recently or zero sales ever)
+    neverSoldProducts: products.filter(p => p.stock > 0 && (!p.lastSoldDate)).map(p => ({
+      _id: p._id,
+      name: p.name,
+      stock: p.stock,
+      value: p.stock * p.price,
+      daysInStock: p.createdAt ? Math.floor((new Date() - new Date(p.createdAt)) / (1000 * 60 * 60 * 24)) : 0
+    })).sort((a, b) => b.value - a.value).slice(0, 20),
 
     // Also fix topCategoriesByValue to include name
     topCategoriesByValue: Object.entries(byCategory)
@@ -141,6 +189,7 @@ const salesReport = async (orgId, branchId, start, end) => {
   const byCategory = {};
   const byPayment = {};
   const byHour = Array(24).fill(0).map(() => ({ count: 0, revenue: 0 }));
+  const productProfitability = {};
 
   sales.forEach(s => {
     if (s.status !== 'completed') return;
@@ -157,6 +206,16 @@ const salesReport = async (orgId, branchId, start, end) => {
       byProduct[p.productId] = (byProduct[p.productId] || { qty: 0, revenue: 0, name: p.name });
       byProduct[p.productId].qty += p.quantity;
       byProduct[p.productId].revenue += p.price * p.quantity;
+
+      // Calculate profit margin for products sold
+      const cost = p.cost || p.buyingPrice || p.averageCost || 0;
+      const profit = (p.price - cost) * p.quantity;
+      const profitMargin = p.price > 0 ? ((p.price - cost) / p.price) * 100 : 0;
+      
+      productProfitability[p.productId] = (productProfitability[p.productId] || { name: p.name, profit: 0, margin: profitMargin, revenue: 0, qty: 0 });
+      productProfitability[p.productId].profit += profit;
+      productProfitability[p.productId].revenue += p.price * p.quantity;
+      productProfitability[p.productId].qty += p.quantity;
     });
   });
 
@@ -184,17 +243,29 @@ sales.forEach(s => {
     topProducts: Object.values(byProduct)
       .sort((a, b) => b.revenue - a.revenue)
       .slice(0, 10),
+    topProfitableProducts: Object.values(productProfitability)
+      .sort((a, b) => b.profit - a.profit)
+      .slice(0, 10),
     peakHours: byHour
       .map((h, i) => ({ hour: i, count: h.count, revenue: h.revenue }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 5),
-      dailyBreakdown: Object.entries(dailySales).map(([date, data]) => ({
-    date,
-    revenue: data.revenue,
-    transactions: data.transactions,
-  }))
+    dailyBreakdown: Object.entries(dailySales).map(([date, data]) => ({
+      date,
+      revenue: data.revenue,
+      transactions: data.transactions,
+    })),
+    transactions: sales.map(s => ({
+      _id: s._id,
+      date: s.createdAt,
+      description: s.products.map(p => p.name).slice(0, 3).join(', ') + (s.products.length > 3 ? '...' : ''),
+      amount: s.total,
+      items: s.products.reduce((acc, p) => acc + p.quantity, 0),
+      paymentMethod: s.paymentMethod,
+      status: s.status,
+      customer: s.customerId
+    })).sort((a, b) => new Date(b.date) - new Date(a.date))
   };
-
 };
 
 // ──────────────────────────────────────────────────────────────
@@ -245,14 +316,42 @@ const procurementReport = async (orgId, branchId, start, end) => {
     fulfillmentRate: itemsOrdered ? (itemsReceived / itemsOrdered) * 100 : 0,
     spendingByBranch: Object.entries(byBranch).map(([id, spend]) => ({ branchId: id, spend })),
     topItemsOrdered: Object.entries(byItem)
-      .map(([id, qty]) => ({ productId: id, quantity: qty }))
+      .map(([id, qty]) => {
+        // Find product name efficiently
+        let productName = id;
+        for (const po of pos) {
+          const item = po.items.find(i => i.productId.toString() === id);
+          if (item && item.name) {
+            productName = item.name;
+            break;
+          }
+        }
+        return { productId: id, productName, quantity: qty };
+      })
       .sort((a, b) => b.quantity - a.quantity)
       .slice(0, 10),
     topSuppliersBySpend: Object.entries(bySupplier)
-      .map(([id, spend]) => ({ supplierId: id, spend }))
+      .map(([id, spend]) => {
+        let supplierName = id;
+        const po = pos.find(p => p.supplierId && p.supplierId._id.toString() === id);
+        if (po && po.supplierId && po.supplierId.name) supplierName = po.supplierId.name;
+        return { supplierId: id, supplierName, spend };
+      })
       .sort((a, b) => b.spend - a.spend)
-      .slice(0, 5),
-    overduePOs: pos.filter(p => p.expectedDeliveryDate && new Date(p.expectedDeliveryDate) < new Date() && p.status !== 'received').length
+      .slice(0, 10),
+    overduePOs: pos.filter(p => p.expectedDeliveryDate && new Date(p.expectedDeliveryDate) < new Date() && p.status !== 'received').length,
+    transactions: pos.map(p => ({
+      _id: p._id,
+      date: p.createdAt,
+      dueDate: p.expectedDeliveryDate,
+      supplierId: p.supplierId?._id,
+      supplierName: p.supplierId?.name || 'Unknown',
+      description: `Purchase Order with ${p.items.length} items`,
+      amount: p.totalCost || 0,
+      itemsOrdered: p.items.reduce((acc, i) => acc + (i.quantity || 0), 0),
+      itemsReceived: p.items.reduce((acc, i) => acc + (i.receivedQuantity || 0), 0),
+      status: p.status
+    })).sort((a, b) => new Date(b.date) - new Date(a.date))
   };
 };
 
@@ -293,7 +392,16 @@ const expensesReport = async (orgId, branchId, start, end) => {
     topCategories: Object.entries(byCategory)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 5)
-      .map(([cat, amt]) => ({ category: cat, amount: amt }))
+      .map(([cat, amt]) => ({ category: cat, amount: amt })),
+    transactions: expenses.map(e => ({
+      _id: e._id,
+      date: e.dateIncurred,
+      category: e.category,
+      description: e.description,
+      amount: e.amount,
+      paymentMethod: e.paymentMethod,
+      status: e.status
+    })).sort((a, b) => new Date(b.date) - new Date(a.date))
   };
 };
 
@@ -353,4 +461,10 @@ const getReport = async (req, res) => {
   }
 };
 
-module.exports = { getReport };
+module.exports = { 
+  getReport,
+  inventoryReport,
+  salesReport,
+  procurementReport,
+  expensesReport
+};

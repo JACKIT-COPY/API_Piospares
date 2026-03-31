@@ -118,8 +118,89 @@ const deleteSupplier = async (req, res) => {
 // @access  Owner/Manager/Cashier/SuperManager
 const listSuppliers = async (req, res) => {
   try {
-    const suppliers = await Supplier.find({ orgId: req.user.orgId, isDeleted: false }).lean();
+    const { branchId } = req.query;
+    const mongoose = require('mongoose');
+    const query = { orgId: new mongoose.Types.ObjectId(req.user.orgId), isDeleted: false };
+
+    // Build the PO lookup match condition — optionally filter by branchId
+    const poMatchExpr = [
+      { $eq: ['$supplierId', '$$supplierId'] },
+      { $ne: ['$isDeleted', true] }
+    ];
+    if (branchId) {
+      poMatchExpr.push({ $eq: ['$branchId', new mongoose.Types.ObjectId(branchId)] });
+    }
+
+    const pipeline = [
+      { $match: query },
+      {
+        $lookup: {
+          from: 'purchaseorders',
+          let: { supplierId: '$_id' },
+          pipeline: [
+            { $match: { $expr: { $and: poMatchExpr } } }
+          ],
+          as: 'supplierPOs'
+        }
+      },
+      {
+        $addFields: {
+          totalProcured: { $sum: '$supplierPOs.totalCost' },
+          poVolume: { $size: '$supplierPOs' }
+        }
+      },
+      { $project: { supplierPOs: 0 } },
+      { $sort: { createdAt: -1 } }
+    ];
+
+    const suppliers = await Supplier.aggregate(pipeline);
     res.json(suppliers);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// @desc    Get top supplier for the current month
+// @route   GET /procurement/suppliers/top-this-month
+// @access  Owner/Manager/Cashier/SuperManager
+const getTopSupplierThisMonth = async (req, res) => {
+  try {
+    const { branchId } = req.query;
+    const startOfMonth = new Date();
+    startOfMonth.setDate(1);
+    startOfMonth.setHours(0, 0, 0, 0);
+
+    const mongoose = require('mongoose');
+    const orgId = new mongoose.Types.ObjectId(req.user.orgId);
+
+    const matchStage = {
+      orgId,
+      isDeleted: false,
+      status: { $in: ['completed', 'received'] },
+      createdAt: { $gte: startOfMonth },
+      supplierId: { $ne: null }
+    };
+    if (branchId) {
+      matchStage.branchId = new mongoose.Types.ObjectId(branchId);
+    }
+
+    const topSupplier = await mongoose.model('PurchaseOrder').aggregate([
+      { $match: matchStage },
+      {
+        $group: {
+          _id: '$supplierId',
+          totalProcured: { $sum: '$totalCost' }
+        }
+      },
+      { $sort: { totalProcured: -1 } },
+      { $limit: 1 }
+    ]);
+
+    if (topSupplier.length > 0) {
+      res.json({ supplierId: topSupplier[0]._id });
+    } else {
+      res.json({ supplierId: null });
+    }
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -198,18 +279,53 @@ const updatePO = async (req, res) => {
 
 // @desc    Delete a purchase order (soft delete)
 // @route   DELETE /procurement/purchase-orders/:id
-// @access  Owner/Manager/SuperManager
+// @access  Owner ONLY (for stock reversal and expense cleanup)
 const deletePO = async (req, res) => {
+  if (req.user.role !== 'Owner') {
+    return res.status(403).json({ message: 'Only an Owner can delete a Purchase Order' });
+  }
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
   try {
-    const po = await PurchaseOrder.findOneAndUpdate(
-      { _id: req.params.id, orgId: req.user.orgId, isDeleted: false },
-      { isDeleted: true, updatedBy: req.user.userId },
-      { new: true }
-    );
+    const po = await PurchaseOrder.findOne({ _id: req.params.id, orgId: req.user.orgId, isDeleted: false }).session(session);
     if (!po) return res.status(404).json({ message: 'Purchase Order not found' });
-    res.json({ message: 'Purchase Order deleted' });
+
+    // 1. Revert stock if any goods were received
+    if (['received', 'completed', 'ordered'].includes(po.status)) {
+      for (const item of po.items) {
+        if (item.receivedQuantity > 0) {
+          const product = await Product.findOne({ _id: item.productId, orgId: req.user.orgId, branchId: po.branchId }).session(session);
+          if (product) {
+            await Product.findOneAndUpdate(
+              { _id: item.productId, orgId: req.user.orgId, branchId: po.branchId },
+              { $inc: { stock: -item.receivedQuantity } },
+              { session }
+            );
+          }
+        }
+      }
+    }
+
+    // 2. Remove recorded expenses associated with this PO
+    await Expense.updateMany(
+      { referenceId: po._id, orgId: req.user.orgId, isDeleted: false },
+      { isDeleted: true, updatedBy: req.user.userId },
+      { session }
+    );
+
+    // 3. Mark PO as deleted
+    po.isDeleted = true;
+    po.updatedBy = req.user.userId;
+    await po.save({ session });
+
+    await session.commitTransaction();
+    res.json({ message: 'Purchase Order deleted, stock reverted, and expenses removed' });
   } catch (err) {
+    await session.abortTransaction();
     res.status(500).json({ message: err.message });
+  } finally {
+    session.endSession();
   }
 };
 
@@ -312,6 +428,7 @@ const receiveGoods = async (req, res) => {
           description: `Expense for PO ${po._id} from supplier ${po.supplierId}`,
           dateIncurred: new Date(),
           status: po.pendingAmount === 0 ? 'Paid' : 'Pending',
+          supplierId: po.supplierId,
           referenceId: po._id,
           createdBy: req.user.userId,
           updatedBy: req.user.userId
@@ -319,6 +436,7 @@ const receiveGoods = async (req, res) => {
       } else {
         expense.status = po.pendingAmount === 0 ? 'Paid' : 'Pending';
         expense.amount = po.totalCost;
+        expense.supplierId = po.supplierId;
         expense.updatedBy = req.user.userId;
       }
       await expense.save({ session });
@@ -381,6 +499,6 @@ const payPO = async (req, res) => {
 
 
 module.exports = {
-  createSupplier, updateSupplier, deleteSupplier, listSuppliers,
+  createSupplier, updateSupplier, deleteSupplier, listSuppliers, getTopSupplierThisMonth,
   createPO, updatePO, deletePO, listPOs, receiveGoods, payPO
 };
