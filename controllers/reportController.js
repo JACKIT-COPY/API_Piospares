@@ -35,6 +35,32 @@ const inventoryReport = async (orgId, branchId, start, end) => {
     .populate('categoryId', 'name')  // This is the key line
     .lean();
 
+  // Fetch sales to get product sales data
+  const saleQuery = {
+    orgId: new mongoose.Types.ObjectId(orgId),
+    isDeleted: false
+  };
+  if (branchId) saleQuery.branchId = new mongoose.Types.ObjectId(branchId);
+  const sales = await Sale.find(saleQuery).lean();
+
+  // Build product sales map
+  const productSalesMap = {};
+  sales.forEach(sale => {
+    if (sale.products) {
+      sale.products.forEach(prod => {
+        const prodId = prod.productId?.toString() || prod._id?.toString();
+        if (!productSalesMap[prodId]) {
+          productSalesMap[prodId] = { totalUnits: 0, lastSoldDate: null };
+        }
+        productSalesMap[prodId].totalUnits += prod.quantity || 0;
+        const saleDate = new Date(sale.createdAt);
+        if (!productSalesMap[prodId].lastSoldDate || saleDate > new Date(productSalesMap[prodId].lastSoldDate)) {
+          productSalesMap[prodId].lastSoldDate = sale.createdAt;
+        }
+      });
+    }
+  });
+
   const totalValue = products.reduce((sum, p) => sum + (p.stock * p.price), 0);
   const totalCost = products.reduce((sum, p) => sum + (p.stock * (p.averageCost || p.buyingPrice || 0)), 0);
   const totalProfit = totalValue - totalCost;
@@ -71,9 +97,16 @@ const inventoryReport = async (orgId, branchId, start, end) => {
     byBranch[branch].value += p.stock * p.price;
     byBranch[branch].qty += p.stock;
 
-    // Top products
+    // Top products with sales data
+    const salesData = productSalesMap[p._id.toString()] || { totalUnits: 0, lastSoldDate: null };
+    topByQty.push({ 
+      _id: p._id, 
+      name: p.name, 
+      qty: p.stock,
+      totalUnitsSold: salesData.totalUnits,
+      lastSoldDate: salesData.lastSoldDate
+    });
     topByValue.push({ _id: p._id, name: p.name, value: p.stock * p.price });
-    topByQty.push({ _id: p._id, name: p.name, qty: p.stock });
   });
 
   // Calculate profit & margin
@@ -82,6 +115,12 @@ const inventoryReport = async (orgId, branchId, start, end) => {
     cat.profit = cat.value - cat.cost;
     cat.margin = cat.value ? (cat.profit / cat.value) * 100 : 0;
   });
+
+  // Determine fast vs slow moving: fast if totalUnitsSold > 5, slow otherwise
+  const topByQtyWithMovement = topByQty.sort((a, b) => b.qty - a.qty).slice(0, 10).map(p => ({
+    ...p,
+    sellIntensity: p.totalUnitsSold > 5 ? 'fast' : 'slow'
+  }));
 
   return {
     totalInventoryValue: totalValue,
@@ -102,7 +141,7 @@ const inventoryReport = async (orgId, branchId, start, end) => {
     byBranch: Object.entries(byBranch).map(([id, data]) => ({ branchId: id, ...data })),
 
     topProductsByValue: topByValue.sort((a, b) => b.value - a.value).slice(0, 10),
-    topProductsByQuantity: topByQty.sort((a, b) => b.qty - a.qty).slice(0, 10),
+    topProductsByQuantity: topByQtyWithMovement,
 
     // Stale stock (never sold/moved recently or zero sales ever)
     neverSoldProducts: products.filter(p => p.stock > 0 && (!p.lastSoldDate)).map(p => ({
@@ -422,4 +461,10 @@ const getReport = async (req, res) => {
   }
 };
 
-module.exports = { getReport };
+module.exports = { 
+  getReport,
+  inventoryReport,
+  salesReport,
+  procurementReport,
+  expensesReport
+};

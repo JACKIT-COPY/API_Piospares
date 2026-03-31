@@ -24,6 +24,8 @@ const superAdminRoutes = require('./routes/superAdminRoutes');
 const customerRoutes = require('./routes/customerRoutes');
 const debtorsRoutes = require('./routes/debtorsRoutes');
 const creditorsRoutes = require('./routes/creditorsRoutes');
+const automatedReportRoutes = require('./routes/automatedReportRoutes');
+const { startReportScheduler, stopReportScheduler } = require('./utils/reportSchedulerJob');
 
 dotenv.config();
 connectDB();
@@ -80,6 +82,7 @@ app.use('/super-admin', superAdminRoutes);
 app.use('/customers', customerRoutes);
 app.use('/debtors', debtorsRoutes);
 app.use('/creditors', creditorsRoutes);
+app.use('/automated-reports', automatedReportRoutes);
 
 // Swagger
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs));
@@ -93,7 +96,21 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT} in ${process.env.NODE_ENV || 'development'} mode`));
+const server = app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT} in ${process.env.NODE_ENV || 'development'} mode`);
+  
+  // Start the automated report scheduler
+  startReportScheduler();
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM signal received: closing HTTP server');
+  stopReportScheduler();
+  server.close(() => {
+    console.log('HTTP server closed');
+  });
+});
 
 // // export the app so serverless runtimes (Vercel) can call it
 // module.exports = app;
