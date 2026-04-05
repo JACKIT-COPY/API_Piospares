@@ -6,7 +6,7 @@ const mongoose = require('mongoose');
 // Subcategories per category
 const subCategories = {
   Operating: ['Rent', 'Utilities', 'Supplies', 'LicensesPermits'],
-  Employee: ['SalariesWages', 'Meals', 'Welfare', 'Commissions'],
+  Employee: ['SalariesWages', 'Meals', 'Welfare', 'Commissions', 'Dividends'],
   Procurement: ['InventoryPurchase'], // Auto-derived
   SalesMarketing: ['Advertising', 'Promotions', 'Events'],
   FinancialAdministrative: ['BankCharges', 'ProfessionalFees', 'Subscriptions', 'Loans'],
@@ -31,7 +31,8 @@ const createExpenseSchema = Joi.object({
   dateIncurred: Joi.date().required(),
   status: Joi.string().valid('Pending', 'Paid', 'Overdue').optional(),
   paymentMethod: Joi.string().valid('Cash', 'BankTransfer', 'MobilePayment', 'Credit').optional(),
-  supplierId: Joi.string().allow('', null).optional()
+  supplierId: Joi.string().allow('', null).optional(),
+  employeeId: Joi.string().allow('', null).optional()
 });
 
 const updateExpenseSchema = createExpenseSchema.options({ presence: 'optional' }).min(1);
@@ -145,6 +146,7 @@ const listExpenses = async (req, res) => {
     if (category) query.category = category;
     if (subCategory) query.subCategory = subCategory;
     if (status) query.status = status;
+    if (req.query.employeeId) query.employeeId = req.query.employeeId;
     if (startDate || endDate) {
       query.dateIncurred = {};
       if (startDate) query.dateIncurred.$gte = new Date(startDate);
@@ -153,6 +155,8 @@ const listExpenses = async (req, res) => {
 
     const expenses = await Expense.find(query)
       .populate('supplierId', 'name contactEmail contactPhone')
+      .populate('employeeId', 'name email role')
+      .populate('createdBy', 'name')
       .lean();
     res.json(expenses);
   } catch (err) {

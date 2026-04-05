@@ -8,9 +8,10 @@ const userSchema = Joi.object({
   name: Joi.string().min(2).max(50).optional(),
   email: Joi.string().email().optional(),
   password: Joi.string().min(8).optional(),
-  role: Joi.string().valid('SuperManager', 'Manager', 'Cashier').optional(),
+  role: Joi.string().valid('SuperManager', 'Manager', 'Cashier', 'Shareholder').optional(),
   branchIds: Joi.array().items(Joi.string()).optional(),
-  status: Joi.string().valid('Active', 'On Leave', 'Inactive').optional()
+  status: Joi.string().valid('Active', 'On Leave', 'Inactive').optional(),
+  dailyWage: Joi.number().min(0).optional()
 });
 
 // @desc    Invite/add new user
@@ -20,7 +21,7 @@ const inviteUser = async (req, res) => {
   const { error } = userSchema.validate(req.body);
   if (error) return res.status(400).json({ message: error.details[0].message });
 
-  const { name, email, password, role, branchIds, status } = req.body;
+  const { name, email, password, role, branchIds, status, dailyWage } = req.body;
 
   try {
     // Check if user exists
@@ -44,8 +45,13 @@ const inviteUser = async (req, res) => {
     const validatedBranchIds = branches.map(branch => branch._id.toString());
 
     // Hash password
-    const salt = await bcrypt.genSalt(10);
-    const passwordHash = await bcrypt.hash(password, salt);
+    let passwordHash = undefined;
+    if (password) {
+      const salt = await bcrypt.genSalt(10);
+      passwordHash = await bcrypt.hash(password, salt);
+    } else if (role !== 'Shareholder') {
+      return res.status(400).json({ message: 'Password is required' });
+    }
 
     // Create user
     const user = new User({
@@ -53,9 +59,10 @@ const inviteUser = async (req, res) => {
       branchIds: validatedBranchIds,
       name,
       email,
-      passwordHash,
+      ...(passwordHash && { passwordHash }),
       role,
-      status: status || 'Active'
+      status: status || 'Active',
+      dailyWage: dailyWage || 0
     });
     await user.save();
 
@@ -67,7 +74,8 @@ const inviteUser = async (req, res) => {
       name: user.name,
       email: user.email,
       role: user.role,
-      status: user.status
+      status: user.status,
+      dailyWage: user.dailyWage
     };
 
     res.status(201).json(userResponse);
