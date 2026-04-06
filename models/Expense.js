@@ -20,6 +20,7 @@ const expenseSchema = new mongoose.Schema({
   paymentMethod: { type: String, enum: ['Cash', 'BankTransfer', 'MobilePayment', 'Credit'] },
   supplierId: { type: mongoose.Schema.Types.ObjectId, ref: 'Supplier' }, // Link to supplier for business expenses
   referenceId: { type: mongoose.Schema.Types.ObjectId, ref: 'PurchaseOrder' }, // For procurement links
+  employeeId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // For employee wages/dividends
   isDeleted: { type: Boolean, default: false },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }

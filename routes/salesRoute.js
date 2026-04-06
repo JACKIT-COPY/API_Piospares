@@ -1,5 +1,5 @@
 const express = require('express');
-const { createSale, listSales, updateSaleStatus, softDeleteSale, listRecentlyDeleted } = require('../controllers/salesController');
+const { createSale, listSales, updateSaleStatus, updateSaleSplitStatus, softDeleteSale, listRecentlyDeleted } = require('../controllers/salesController');
 const authMiddleware = require('../middlewares/authMiddleware');
 const roleMiddleware = require('../middlewares/roleMiddleware');
 
@@ -153,6 +153,40 @@ router.get('/', authMiddleware, roleMiddleware(['Owner', 'Manager', 'Cashier', '
  *         description: Server error
  */
 router.put('/:id', authMiddleware, roleMiddleware(['Owner', 'Manager', 'SuperManager']), updateSaleStatus);
+
+/**
+ * @swagger
+ * /sales/{id}/splits/{splitIdx}:
+ *   put:
+ *     summary: Update a specific split payment status
+ *     tags: [Sales]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: path
+ *         name: splitIdx
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               completed:
+ *                 type: boolean
+ *     responses:
+ *       200:
+ *         description: Split status updated
+ */
+router.put('/:id/splits/:splitIdx', authMiddleware, roleMiddleware(['Owner', 'Manager', 'Cashier', 'SuperManager']), updateSaleSplitStatus);
 
 /**
  * @swagger

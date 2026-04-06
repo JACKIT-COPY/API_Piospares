@@ -10,9 +10,10 @@ const userSchema = new mongoose.Schema({
   branchIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Branch' }],
   name: { type: String, required: true },
   email: { type: String, required: true, unique: true },
-  passwordHash: { type: String, required: true },
-  role: { type: String, enum: ['SuperAdmin', 'Owner', 'SuperManager', 'Manager', 'Cashier'], required: true },
-  status: { type: String, enum: ['Active', 'On Leave', 'Inactive'], default: 'Active' }
+  passwordHash: { type: String, required: function() { return this.role !== 'Shareholder'; } },
+  role: { type: String, enum: ['SuperAdmin', 'Owner', 'SuperManager', 'Manager', 'Cashier', 'Shareholder'], required: true },
+  status: { type: String, enum: ['Active', 'On Leave', 'Inactive'], default: 'Active' },
+  dailyWage: { type: Number, default: 0 }
 }, { timestamps: true });
 
 module.exports = mongoose.model('User', userSchema);
