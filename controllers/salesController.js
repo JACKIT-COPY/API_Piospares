@@ -56,6 +56,12 @@ const updateStatusSchema = Joi.object({
     .when('status', { is: 'completed', then: Joi.required() }),
 });
 
+const updateSplitSchema = Joi.object({
+  completed: Joi.boolean().optional(),
+  partialAmount: Joi.number().positive().optional(),
+  method: Joi.string().valid('cash', 'mpesa', 'paybill').optional(),
+}).or('completed', 'partialAmount');
+
 
 // ──────────────────────────────────────────────────────────────
 // PUBLIC: createSale
@@ -114,8 +120,8 @@ const createSale = async (req, res) => {
     // Determine pending/completed: if any split is mpesa or pending, we set pending
     let isPending = paymentMethod === 'pending' || paymentMethod === 'mpesa';
     if (paymentMethod === 'split') {
-      const anyPendingOrMpesa = paymentSplits.some(p => p.method === 'mpesa' || p.method === 'pending');
-      isPending = anyPendingOrMpesa;
+      const hasAnyPending = paymentSplits.some(p => p.method !== 'cash' && p.method !== 'paybill');
+      isPending = hasAnyPending;
     }
 
     const saleData = {
@@ -130,8 +136,8 @@ const createSale = async (req, res) => {
       paymentSplits: paymentMethod === 'split'
         ? paymentSplits.map(p => ({
           ...p,
-          // cash and paybill are completed by default; mpesa and pending remain not completed
-          completed: typeof p.completed === 'boolean' ? p.completed : (p.method === 'cash' || p.method === 'paybill')
+          // cash and paybill are always completed, mpesa/pending are not
+          completed: (p.method === 'cash' || p.method === 'paybill') ? true : false
         }))
         : [],
       status: isPending ? 'pending' : 'completed',
@@ -154,7 +160,8 @@ const createSale = async (req, res) => {
     await sale.save({ session });
 
     // ---- 4. Deduct stock for immediate payments ----
-    const shouldDeductStock = paymentMethod === 'cash' || paymentMethod === 'paybill' || (paymentMethod === 'split' && (!paymentSplits || !paymentSplits.some(p => p.method === 'mpesa' || p.method === 'pending')));
+    const shouldDeductStock = paymentMethod === 'cash' || paymentMethod === 'paybill' || 
+      (paymentMethod === 'split' && paymentSplits.some(p => p.method === 'cash' || p.method === 'paybill'));
     if (shouldDeductStock) {
       for (const it of enriched) {
         await Product.findByIdAndUpdate(
@@ -355,11 +362,85 @@ const listRecentlyDeleted = async (req, res) => {
   }
 };
 
+// ──────────────────────────────────────────────────────────────
+// PUBLIC: updateSaleSplitStatus (Manual)
+// ──────────────────────────────────────────────────────────────
+const updateSaleSplitStatus = async (req, res) => {
+  const { error } = updateSplitSchema.validate(req.body);
+  if (error) return res.status(400).json({ message: error.details[0].message });
+
+  const { id, splitIdx } = req.params;
+  const { completed, partialAmount, method } = req.body;
+
+  try {
+    const sale = await Sale.findOne({
+      _id: id,
+      orgId: req.user.orgId,
+      isDeleted: false
+    });
+
+    if (!sale) throw new Error('Sale not found or deleted');
+    
+    // If it's a 'pending' sale, convert it to a 'split' sale to handle partials
+    if (sale.paymentMethod === 'pending') {
+      sale.paymentMethod = 'split';
+      sale.paymentSplits = [{
+        method: 'pending',
+        amount: sale.total,
+        completed: false
+      }];
+    }
+
+    if (sale.paymentMethod !== 'split') throw new Error('Not a split payment sale');
+    if (!sale.paymentSplits[splitIdx]) throw new Error('Split not found');
+
+    const split = sale.paymentSplits[splitIdx];
+
+    if (partialAmount) {
+      if (partialAmount > split.amount) throw new Error('Partial amount exceeds split balance');
+      
+      if (partialAmount === split.amount) {
+        // Complete the split fully
+        sale.paymentSplits[splitIdx].completed = true;
+        sale.paymentSplits[splitIdx].paidAt = new Date();
+      } else {
+        // Record partial: decrease current split and add new completed split
+        sale.paymentSplits[splitIdx].amount -= partialAmount;
+        
+        sale.paymentSplits.push({
+          method: method || 'cash',
+          amount: partialAmount,
+          completed: true,
+          paidAt: new Date()
+        });
+      }
+    } else if (completed !== undefined) {
+      sale.paymentSplits[splitIdx].completed = completed;
+      sale.paymentSplits[splitIdx].paidAt = completed ? new Date() : null;
+    }
+
+    await sale.save();
+
+    // Re-check if all are completed
+    const allCompleted = sale.paymentSplits.every(s => s.completed);
+
+    if (allCompleted && sale.status === 'pending') {
+      const finalSale = await updateSaleStatusInternal(id, 'completed', 'split');
+      return res.json(finalSale);
+    }
+
+    res.json(sale);
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
+};
+
 module.exports = {
   createSale,
   listSales,
   updateSaleStatus,
-  updateSaleStatusInternal, // ← used by callback
+  updateSaleSplitStatus, // ← ADDED
+  updateSaleStatusInternal,
   softDeleteSale,
   listRecentlyDeleted,
 };

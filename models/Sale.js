@@ -24,6 +24,7 @@ const saleSchema = new mongoose.Schema({
     stkRequestID: { type: String, default: null },
     receiptNumber: { type: String, default: null },
     completed: { type: Boolean, default: false },
+    paidAt: { type: Date, default: null },
   }],
   status: { type: String, enum: ['completed', 'pending', 'returned'], default: 'completed' },
 

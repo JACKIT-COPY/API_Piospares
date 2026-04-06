@@ -143,7 +143,13 @@ const handleCallback = async (req, res) => {
       }
 
       // mark split as completed and set receipt
-      await Sale.findByIdAndUpdate(sale._id, { $set: { [`paymentSplits.${splitIdx}.completed`]: true, [`paymentSplits.${splitIdx}.receiptNumber`]: receipt } });
+      await Sale.findByIdAndUpdate(sale._id, { 
+        $set: { 
+          [`paymentSplits.${splitIdx}.completed`]: true, 
+          [`paymentSplits.${splitIdx}.receiptNumber`]: receipt,
+          [`paymentSplits.${splitIdx}.paidAt`]: new Date()
+        } 
+      });
       console.log(`Sale ${sale._id} split ${splitIdx} completed via M-Pesa – receipt ${receipt}`);
 
       // re-fetch to check if all splits are completed
