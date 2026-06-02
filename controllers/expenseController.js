@@ -6,7 +6,7 @@ const mongoose = require('mongoose');
 // Subcategories per category
 const subCategories = {
   Operating: ['Rent', 'Utilities', 'Supplies', 'LicensesPermits'],
-  Employee: ['SalariesWages', 'Meals', 'Welfare', 'Commissions', 'Dividends'],
+  Employee: ['SalariesWages', 'Meals', 'Welfare', 'Commissions', 'Dividends', 'Donations', 'AccountancyFees'],
   Procurement: ['InventoryPurchase'], // Auto-derived
   SalesMarketing: ['Advertising', 'Promotions', 'Events'],
   FinancialAdministrative: ['BankCharges', 'ProfessionalFees', 'Subscriptions', 'Loans'],
