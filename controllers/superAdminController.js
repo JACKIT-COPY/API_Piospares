@@ -20,7 +20,7 @@ const orgUpdateSchema = Joi.object({
 const userUpdateSchema = Joi.object({
     name: Joi.string().min(2).max(50).optional(),
     email: Joi.string().email().optional(),
-    role: Joi.string().valid('SuperAdmin', 'Owner', 'SuperManager', 'Manager', 'Cashier').optional(),
+    role: Joi.string().valid('SuperAdmin', 'Owner', 'SuperManager', 'Manager', 'Cashier', 'Accountant', 'Developer').optional(),
     status: Joi.string().valid('Active', 'On Leave', 'Inactive').optional(),
     branchIds: Joi.array().items(Joi.string()).optional()
 });
