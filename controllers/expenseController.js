@@ -5,14 +5,34 @@ const mongoose = require('mongoose');
 
 // Subcategories per category
 const subCategories = {
-  Operating: ['Rent', 'Utilities', 'Supplies', 'LicensesPermits'],
+  Operating: [
+    'Rent',
+    'Utilities',
+    'Electricity',
+    'Water',
+    'Telephone',
+    'Airtime',
+    'Internet',
+    'WiFi',
+    'RepairMaintenance',
+  ],
   Employee: ['SalariesWages', 'Meals', 'Welfare', 'Commissions', 'Dividends', 'Donations', 'AccountancyFees'],
   Procurement: ['InventoryPurchase'], // Auto-derived
-  SalesMarketing: ['Advertising', 'Promotions', 'Events'],
-  FinancialAdministrative: ['BankCharges', 'ProfessionalFees', 'Subscriptions', 'Loans'],
+  SalesMarketing: ['Advertising', 'Promotions', 'Events', 'PublicRelations'],
+  FinancialAdministrative: [
+    'BankCharges',
+    'ProfessionalFees',
+    'Consultancy',
+    'Subscriptions',
+    'Loans',
+    'Taxes',
+    'KRAFees',
+    'RegulatoryFees',
+  ],
   LogisticsTransportation: ['Shipping', 'Fuel', 'VehicleMaintenance'],
+  Technology: ['Development', 'ServerCosts', 'SoftwareLicenses', 'Hosting', 'ITSupport'],
   CapitalFixed: ['Equipment', 'Furniture', 'Renovations'],
-  Miscellaneous: ['Other']
+  Miscellaneous: ['Other'],
 };
 
 // Validation Schemas
