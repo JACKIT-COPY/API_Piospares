@@ -11,7 +11,7 @@ const userSchema = new mongoose.Schema({
   name: { type: String, required: true },
   email: { type: String, required: true, unique: true },
   passwordHash: { type: String, required: function() { return this.role !== 'Shareholder'; } },
-  role: { type: String, enum: ['SuperAdmin', 'Owner', 'SuperManager', 'Manager', 'Cashier', 'Shareholder'], required: true },
+  role: { type: String, enum: ['SuperAdmin', 'Owner', 'SuperManager', 'Manager', 'Cashier', 'Accountant', 'Developer', 'Shareholder'], required: true },
   status: { type: String, enum: ['Active', 'On Leave', 'Inactive'], default: 'Active' },
   dailyWage: { type: Number, default: 0 }
 }, { timestamps: true });
