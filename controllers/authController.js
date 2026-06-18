@@ -101,7 +101,7 @@ const register = async (req, res) => {
     await user.save({ session });
 
     // Generate JWT
-    const payload = { userId: user._id, orgId: org._id, role: user.role };
+    const payload = { userId: user._id, orgId: org._id, role: user.role, name: user.name };
     const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1h' });
 
     // Construct response
@@ -147,7 +147,7 @@ const login = async (req, res) => {
 
     // Handle SuperAdmin separately
     if (user.role === 'SuperAdmin') {
-      const payload = { userId: user._id, role: user.role };
+      const payload = { userId: user._id, role: user.role, name: user.name };
       const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '8h' });
 
       return res.json({
@@ -190,7 +190,7 @@ const login = async (req, res) => {
     }
 
     // Generate JWT
-    const payload = { userId: user._id, orgId: user.orgId, role: user.role };
+    const payload = { userId: user._id, orgId: user.orgId, role: user.role, name: user.name };
     const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1h' });
 
     // Construct response

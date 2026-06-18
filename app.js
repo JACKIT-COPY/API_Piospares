@@ -25,6 +25,8 @@ const customerRoutes = require('./routes/customerRoutes');
 const debtorsRoutes = require('./routes/debtorsRoutes');
 const creditorsRoutes = require('./routes/creditorsRoutes');
 const automatedReportRoutes = require('./routes/automatedReportRoutes');
+const stockTransferRoutes = require('./routes/stockTransferRoutes');
+const loanRoutes = require('./routes/loanRoutes');
 const { startReportScheduler, stopReportScheduler } = require('./utils/reportSchedulerJob');
 
 dotenv.config();
@@ -83,6 +85,8 @@ app.use('/customers', customerRoutes);
 app.use('/debtors', debtorsRoutes);
 app.use('/creditors', creditorsRoutes);
 app.use('/automated-reports', automatedReportRoutes);
+app.use('/stock-transfers', stockTransferRoutes);
+app.use('/loans', loanRoutes);
 
 // Swagger
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs));
