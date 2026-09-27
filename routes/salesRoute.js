@@ -1,9 +1,11 @@
 const express = require('express');
-const { createSale, listSales, updateSaleStatus } = require('../controllers/salesController');
+const { createSale, listSales, updateSaleStatus, getRecentlyDeletedSales, deleteSale } = require('../controllers/salesController');
 const authMiddleware = require('../middlewares/authMiddleware');
 const roleMiddleware = require('../middlewares/roleMiddleware');
 
 const router = express.Router();
+
+router.get('/recently-deleted', authMiddleware, roleMiddleware(['Owner', 'Manager', 'SuperManager']), getRecentlyDeletedSales);
 
 /**
  * @swagger
@@ -129,5 +131,6 @@ router.get('/', authMiddleware, roleMiddleware(['Owner', 'Manager', 'Cashier', '
  *         description: Server error
  */
 router.put('/:id', authMiddleware, roleMiddleware(['Owner', 'Manager', 'SuperManager']), updateSaleStatus);
+router.delete('/:id', authMiddleware, roleMiddleware(['Owner', 'Manager', 'SuperManager']), deleteSale);
 
 module.exports = router;
