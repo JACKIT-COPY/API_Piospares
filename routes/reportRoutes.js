@@ -1,5 +1,5 @@
 const express = require('express');
-const { getSalesSummary, getInventorySummary, getExpensesSummary, getProcurementSummary, exportReport } = require('../controllers/reportController');
+const { getSalesSummary, getInventorySummary, getExpensesSummary, getProcurementSummary, exportReport, getComprehensiveReport } = require('../controllers/reportController');
 const authMiddleware = require('../middlewares/authMiddleware');
 const roleMiddleware = require('../middlewares/roleMiddleware');
 
@@ -43,6 +43,7 @@ const router = express.Router();
  *       500:
  *         description: Server error
  */
+router.get('/', authMiddleware, roleMiddleware(['Owner', 'Manager', 'Cashier', 'SuperManager']), getComprehensiveReport);
 router.get('/sales-summary', authMiddleware, roleMiddleware(['Owner', 'Manager', 'Cashier', 'SuperManager']), getSalesSummary);
 router.get('/inventory-summary', authMiddleware, roleMiddleware(['Owner', 'Manager', 'Cashier', 'SuperManager']), getInventorySummary);
 router.get('/expenses-summary', authMiddleware, roleMiddleware(['Owner', 'Manager', 'SuperManager']), getExpensesSummary);

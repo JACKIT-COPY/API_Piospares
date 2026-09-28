@@ -14,6 +14,8 @@ const saleSchema = new mongoose.Schema({
   discount: { type: Number, default: 0 },
   paymentMethod: { type: String, enum: ['cash', 'mpesa', 'pending'], required: true },
   status: { type: String, enum: ['completed', 'pending', 'returned'], default: 'completed' },
+  isDeleted: { type: Boolean, default: false },
+  deletedAt: { type: Date },
 }, { timestamps: true });
 
 saleSchema.index({ orgId: 1, branchId: 1, userId: 1 });

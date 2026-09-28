@@ -164,7 +164,7 @@ const getInventorySummary = async (req, res) => {
     const [productsStats, lowStockItems, overStockItems, stockByCategory, turnover] = await Promise.all([
       Product.aggregate([
         { $match: match },
-        { $group: { _id: null, count: { $sum: 1 }, totalValue: { $sum: { $multiply: ['$price', '$stock'] } } } },
+        { $group: { _id: null, count: { $sum: 1 }, totalValue: { $sum: { $multiply: [{ $ifNull: ['$buyingPrice', 0] }, '$stock'] } } } },
       ]),
       Product.find({
         ...match,
@@ -176,7 +176,7 @@ const getInventorySummary = async (req, res) => {
       }).limit(5).lean(),
       Product.aggregate([
         { $match: match },
-        { $group: { _id: '$categoryId', totalStock: { $sum: '$stock' }, totalValue: { $sum: { $multiply: ['$price', '$stock'] } } } },
+        { $group: { _id: '$categoryId', totalStock: { $sum: '$stock' }, totalValue: { $sum: { $multiply: [{ $ifNull: ['$buyingPrice', 0] }, '$stock'] } } } },
         { $lookup: { from: 'categories', localField: '_id', foreignField: '_id', as: 'category' } },
         { $unwind: '$category' },
         { $project: { name: '$category.name', totalStock: 1, totalValue: 1 } },
@@ -427,4 +427,16 @@ const exportReport = async (req, res) => {
   }
 };
 
-module.exports = { getSalesSummary, getInventorySummary, getExpensesSummary, getProcurementSummary, exportReport };
+// @desc    Get comprehensive report (mocked for now)
+const fs = require('fs');
+const getComprehensiveReport = async (req, res) => {
+  try {
+    const mockDataPath = 'c:\\Users\\ngetich\\Documents\\coding\\piospares\\piospares_onboarding\\components\\pos\\reports\\response.json';
+    const data = JSON.parse(fs.readFileSync(mockDataPath, 'utf8'));
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+module.exports = { getSalesSummary, getInventorySummary, getExpensesSummary, getProcurementSummary, exportReport, getComprehensiveReport };

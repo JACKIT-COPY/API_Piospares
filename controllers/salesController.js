@@ -92,7 +92,7 @@ const createSale = async (req, res) => {
 const listSales = async (req, res) => {
   try {
     const { branchId, status } = req.query;
-    const query = { orgId: req.user.orgId };
+    const query = { orgId: req.user.orgId, isDeleted: { $ne: true } };
     if (branchId) query.branchId = branchId;
     if (status) query.status = status;
     const sales = await Sale.find(query).lean();
@@ -153,4 +153,37 @@ const updateSaleStatus = async (req, res) => {
   }
 };
 
-module.exports = { createSale, listSales, updateSaleStatus };
+// @desc    Get recently deleted sales
+// @route   GET /sales/recently-deleted
+// @access  Owner/Manager/SuperManager
+const getRecentlyDeletedSales = async (req, res) => {
+  try {
+    const { branchId } = req.query;
+    const query = { orgId: req.user.orgId, isDeleted: true };
+    if (branchId) query.branchId = branchId;
+    
+    const sales = await Sale.find(query).sort({ deletedAt: -1 }).limit(50).lean();
+    res.json(sales);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// @desc    Soft delete sale
+// @route   DELETE /sales/:id
+// @access  Owner/Manager/SuperManager
+const deleteSale = async (req, res) => {
+  try {
+    const sale = await Sale.findOne({ _id: req.params.id, orgId: req.user.orgId });
+    if (!sale) return res.status(404).json({ message: 'Sale not found' });
+
+    sale.isDeleted = true;
+    sale.deletedAt = new Date();
+    await sale.save();
+    res.json({ message: 'Sale deleted' });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+module.exports = { createSale, listSales, updateSaleStatus, getRecentlyDeletedSales, deleteSale };

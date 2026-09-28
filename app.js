@@ -11,6 +11,9 @@ const saleRoutes = require('./routes/salesRoute');
 const procurementRoutes = require('./routes/procurementRoutes');
 const expenseRoutes = require('./routes/expenseRoutes');
 const reportRoutes = require('./routes/reportRoutes');
+const debtorRoutes = require('./routes/debtorRoutes');
+const creditorRoutes = require('./routes/creditorRoutes');
+const customerRoutes = require('./routes/customerRoutes');
 const swaggerUi = require('swagger-ui-express');
 const specs = require('./swagger/swagger');
 const helmet = require('helmet');
@@ -59,6 +62,9 @@ app.use('/sales', saleRoutes);
 app.use('/procurement', procurementRoutes);
 app.use('/expenses', expenseRoutes); // New expenses routes
 app.use('/reports', reportRoutes); // New reports routes
+app.use('/debtors', debtorRoutes);
+app.use('/creditors', creditorRoutes);
+app.use('/customers', customerRoutes);
 
 // Swagger
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs));
